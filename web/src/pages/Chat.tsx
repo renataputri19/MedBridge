@@ -3,7 +3,6 @@ import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
 import {
   AlertTriangle,
-  ArrowRight,
   BadgeCheck,
   CalendarDays,
   Check,
@@ -43,18 +42,18 @@ const STORAGE_KEY = 'medbridge.chat-token.v1'
 /**
  * The MedBridge front door.
  *
- * A conversation, and — once there is something to decide — the plan beside it.
- * Never behind it: the plan used to be a page of its own that the chat handed
- * over to, which meant every question cost the patient the thing they were
- * asking about, and arriving at it read like landing on a second website.
+ * One page, one column, and it never becomes a different page. The visitor
+ * lands on a conversation; when there is something to decide, the plan appears
+ * directly underneath it and the page scrolls down to meet it. Scrolling back
+ * up is all it takes to ask a question, because the conversation never went
+ * anywhere.
  *
- * The reason it was ever a separate page is real, though, and this layout still
- * has to answer it: a plan laid out in full, next to a conversation, asks
- * someone to read a discussion and evaluate two dozen priced choices at once.
- * The answer is inside the column rather than outside it — `PlanFlow` shows one
- * step at a time, and each choice in that step is a single collapsed row until
- * the patient opens it. So both surfaces are always on screen, and only one
- * decision is ever asking for attention.
+ * Everything else tried was a way of leaving. A second view lost the plan every
+ * time someone had a question. Two columns kept both but crammed them, which
+ * put a whole priced plan next to a conversation and asked for attention on all
+ * of it at once. The crowding is now solved inside `PlanFlow` instead of by
+ * moving furniture: it deals the plan out one decision at a time, so what is on
+ * screen is a single question with its real alternatives under it.
  *
  * Two things worth knowing when reading this file:
  *
@@ -70,6 +69,9 @@ const STORAGE_KEY = 'medbridge.chat-token.v1'
  * this the visitor is reading something further up and we leave them alone.
  */
 const PINNED_SLACK_PX = 120
+
+/** Height of the sticky site header, so a scroll target lands under it. */
+const HEADER_PX = 64
 
 export default function Chat() {
   const [session, setSession] = useState<ChatSession | null>(null)
@@ -100,6 +102,7 @@ export default function Chat() {
   const listRef = useRef<HTMLDivElement>(null)
   const contentRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
+  const planRef = useRef<HTMLDivElement>(null)
   const pinnedRef = useRef(true)
   const animatingRef = useRef(false)
   const firstPaintRef = useRef(true)
@@ -248,10 +251,11 @@ export default function Chat() {
   /*
    * The first plan, once.
    *
-   * The layout changes shape around it — the hero goes, the column arrives —
-   * so the page returns to the top rather than leaving the visitor at an offset
-   * that now means something else. Once only: doing this on every reprice would
-   * yank the page from under someone who is reading.
+   * It appears under the conversation, which on most screens puts it below the
+   * fold — so the page scrolls down to meet it. This is a scroll, not a
+   * navigation: the conversation is still up there, and scrolling back is all
+   * it takes to ask something. Once only, because doing it on every reprice
+   * would drag the page out from under someone who is reading.
    */
   useEffect(() => {
     if (!hasPlan) {
@@ -261,7 +265,12 @@ export default function Chat() {
     if (handedOffRef.current) return
 
     handedOffRef.current = true
-    window.scrollTo({ top: 0 })
+    requestAnimationFrame(() => {
+      const element = planRef.current
+      if (!element) return
+      const top = element.getBoundingClientRect().top + window.scrollY - HEADER_PX
+      window.scrollTo({ top: Math.max(top, 0), behavior: 'smooth' })
+    })
   }, [hasPlan])
 
   /* ---- Actions ---- */
@@ -356,168 +365,188 @@ export default function Chat() {
   /* ---- The conversation ---- */
 
   /*
-   * One card, in two places. Centred under the hero while it is the only thing
-   * on the page; the left column of the pair once the plan arrives, where it
-   * shortens on a phone to leave the plan visible underneath and pins to the
-   * viewport on a desktop so the composer is always within reach.
-   *
-   * Being able to ask without going anywhere is the whole point of the pair. A
-   * composer you have to scroll back up to find is a page swap with extra steps.
+   * The conversation. Height is capped against the viewport as well as scaled
+   * to it, so the composer stays above the fold. It shortens a little once the
+   * plan is underneath — the top of the next question should be visible without
+   * hunting for it — but it never moves, never folds and never goes away.
    */
   const conversation = (
     <div
       className={cn(
         'flex flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-lg shadow-slate-900/5',
         planVisible
-          ? 'h-[min(46vh,22rem)] min-h-[280px] lg:h-[calc(100dvh-6.5rem)] lg:max-h-[46rem]'
+          ? 'h-[min(48vh,22rem)] min-h-[300px]'
           : 'h-[min(60vh,calc(100vh-24rem))] min-h-[400px]',
       )}
     >
-          <header className="flex items-center gap-2.5 border-b border-slate-200 px-4 py-3">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-teal-100 text-teal-700">
-              <Sparkles className="h-4 w-4" />
-            </div>
-            <div className="min-w-0 flex-1">
-              <p className="text-sm font-semibold text-slate-800">Care assistant</p>
-              <p className="text-[11px] text-slate-500">
-                Here to plan your trip · not medical advice
-              </p>
-            </div>
-            <StageBadge stage={stage} />
-          </header>
+      <header className="flex items-center gap-2.5 border-b border-slate-200 px-4 py-3">
+        <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-teal-100 text-teal-700">
+          <Sparkles className="h-4 w-4" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-semibold text-slate-800">Care assistant</p>
+          <p className="text-[11px] text-slate-500">Here to plan your trip · not medical advice</p>
+        </div>
+        <StageBadge stage={stage} />
+      </header>
 
-          <div className="relative min-h-0 flex-1">
-            <div
-              ref={listRef}
-              onScroll={handleListScroll}
-              className="scrollbar-thin h-full overflow-y-auto overscroll-contain"
-            >
-              <div ref={contentRef} className="space-y-4 px-4 py-4">
-                {loading ? (
-                  <div className="space-y-3">
-                    <Skeleton className="h-16 w-3/4 rounded-2xl" />
-                    <Skeleton className="h-24 w-full rounded-2xl" />
-                  </div>
-                ) : !session ? (
-                  <div className="py-8 text-center">
-                    <p className="text-sm font-medium text-slate-800">
-                      The assistant is unavailable.
-                    </p>
-                    <p className="mt-1 text-sm text-slate-500">
-                      Please call us on {SUPPORT_PHONE} and we'll help you directly.
-                    </p>
-                    <Button className="mt-4" onClick={handleRestart}>
-                      <RefreshCw className="h-4 w-4" />
-                      Try again
-                    </Button>
-                  </div>
-                ) : (
-                  session.messages.map((message) => (
-                    <Turn
-                      key={message.id}
-                      message={message}
-                      busy={busy}
-                      onChoice={(slot, value, label) => {
-                        void run(() => chatApi.choose(session.token, slot, value), label)
-                      }}
-                      onSend={(text) => {
-                        void run(() => chatApi.send(session.token, text), text)
-                      }}
-                    />
-                  ))
-                )}
-
-                {/* Their turn, before the server has one. Same bubble as the
-                    real thing — only dimmed, so the wait reads as "sending"
-                    rather than as a different kind of message. */}
-                {pending !== null && session && (
-                  <div className="flex animate-in justify-end fade-in slide-in-from-bottom-1">
-                    <div className="max-w-[85%] rounded-2xl rounded-br-md bg-brand-600 px-3.5 py-2 text-sm text-white opacity-70 shadow-sm">
-                      {pending}
-                    </div>
-                  </div>
-                )}
-
-                {/* The assistant is composing — shown in the flow so the list
-                    still ends at the bottom while we wait. */}
-                {thinking && session && <TypingBubble />}
+      <div className="relative min-h-0 flex-1">
+        <div
+          ref={listRef}
+          onScroll={handleListScroll}
+          className="scrollbar-thin h-full overflow-y-auto overscroll-contain"
+        >
+          <div ref={contentRef} className="space-y-4 px-4 py-4">
+            {loading ? (
+              <div className="space-y-3">
+                <Skeleton className="h-16 w-3/4 rounded-2xl" />
+                <Skeleton className="h-24 w-full rounded-2xl" />
               </div>
-            </div>
-
-            {/* Only while the visitor has scrolled away — otherwise the list
-                follows on its own and a button would be noise. */}
-            {unpinned && session && (
-              <button
-                type="button"
-                onClick={() => scrollToLatest('smooth')}
-                className="absolute bottom-3 left-1/2 flex -translate-x-1/2 items-center gap-1 rounded-full border border-slate-200 bg-white/95 px-3 py-1.5 text-[11px] font-semibold text-slate-600 shadow-md backdrop-blur transition hover:bg-slate-50"
-              >
-                <ChevronDown className="h-3.5 w-3.5" />
-                Latest message
-              </button>
+            ) : !session ? (
+              <div className="py-8 text-center">
+                <p className="text-sm font-medium text-slate-800">The assistant is unavailable.</p>
+                <p className="mt-1 text-sm text-slate-500">
+                  Please call us on {SUPPORT_PHONE} and we'll help you directly.
+                </p>
+                <Button className="mt-4" onClick={handleRestart}>
+                  <RefreshCw className="h-4 w-4" />
+                  Try again
+                </Button>
+              </div>
+            ) : (
+              session.messages.map((message) => (
+                <Turn
+                  key={message.id}
+                  message={message}
+                  busy={busy}
+                  onChoice={(slot, value, label) => {
+                    void run(() => chatApi.choose(session.token, slot, value), label)
+                  }}
+                  onSend={(text) => {
+                    void run(() => chatApi.send(session.token, text), text)
+                  }}
+                />
+              ))
             )}
-          </div>
 
-          <div className="border-t border-slate-200 p-3">
-            <div className="flex items-center gap-2">
-              <Input
-                ref={inputRef}
-                value={draft}
-                onChange={(event) => setDraft(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter' && !event.shiftKey) {
-                    event.preventDefault()
-                    void handleSend()
-                  }
-                }}
-                placeholder={
-                  canType ? 'Type your message…' : 'Your request has been submitted'
-                }
-                disabled={busy || !canType}
-                aria-label="Message"
-              />
-              <Button
-                size="icon"
-                onClick={handleSend}
-                disabled={busy || !canType || !draft.trim()}
-                aria-label="Send"
-              >
-                <Send className="h-4 w-4" />
-              </Button>
-            </div>
+            {/* Their turn, before the server has one. Same bubble as the real
+                thing — only dimmed, so the wait reads as "sending" rather than
+                as a different kind of message. */}
+            {pending !== null && session && (
+              <div className="flex animate-in justify-end fade-in slide-in-from-bottom-1">
+                <div className="max-w-[85%] rounded-2xl rounded-br-md bg-brand-600 px-3.5 py-2 text-sm text-white opacity-70 shadow-sm">
+                  {pending}
+                </div>
+              </div>
+            )}
+
+            {/* The assistant is composing — shown in the flow so the list still
+                ends at the bottom while we wait. */}
+            {thinking && session && <TypingBubble />}
           </div>
         </div>
 
-        {/* ---- What sits under the conversation ---- */}
-        {submitted?.kind === 'submitted' ? (
-          <div className="mt-3 space-y-3">
-            <SubmittedCard ui={submitted} />
-            <Disclaimer />
-          </div>
-        ) : (
-          !bundle && (
-            <div className="mt-3">
-              <PlanPlaceholder stage={stage} />
-            </div>
-          )
+        {/* Only while the visitor has scrolled away — otherwise the list follows
+            on its own and a button would be noise. */}
+        {unpinned && session && (
+          <button
+            type="button"
+            onClick={() => scrollToLatest('smooth')}
+            className="absolute bottom-3 left-1/2 flex -translate-x-1/2 items-center gap-1 rounded-full border border-slate-200 bg-white/95 px-3 py-1.5 text-[11px] font-semibold text-slate-600 shadow-md backdrop-blur transition hover:bg-slate-50"
+          >
+            <ChevronDown className="h-3.5 w-3.5" />
+            Latest message
+          </button>
         )}
-      </main>
+      </div>
 
-      {/*
-        The way back to the plan, pinned so it is reachable from anywhere in the
-        transcript. It carries the total because that is what someone who came
-        back here to ask a question is holding in their head.
-      */}
-      {bundle && !submitted && (
-        <div className="sticky bottom-0 z-20 border-t border-slate-200 bg-white/95 backdrop-blur">
-          <div className="mx-auto w-full max-w-2xl px-4 py-3">
-            <Button size="lg" className="w-full" onClick={showPlan}>
-              Back to your plan · {formatSgd(bundle.totals.totalSgd)}
-              <ArrowRight className="h-4 w-4" />
-            </Button>
-          </div>
+      <div className="border-t border-slate-200 p-3">
+        <div className="flex items-center gap-2">
+          <Input
+            ref={inputRef}
+            value={draft}
+            onChange={(event) => setDraft(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' && !event.shiftKey) {
+                event.preventDefault()
+                void handleSend()
+              }
+            }}
+            placeholder={canType ? 'Type your message…' : 'Your request has been submitted'}
+            disabled={busy || !canType}
+            aria-label="Message"
+          />
+          <Button
+            size="icon"
+            onClick={handleSend}
+            disabled={busy || !canType || !draft.trim()}
+            aria-label="Send"
+          >
+            <Send className="h-4 w-4" />
+          </Button>
         </div>
-      )}
+      </div>
+    </div>
+  )
+
+  /* ---- The page ---- */
+
+  return (
+    <div className="min-h-screen bg-slate-50">
+      <SiteHeader onRestart={handleRestart} showRestart={Boolean(session)} />
+
+      <Hero />
+
+      {/* Pulled up into the hero's padding so the card sits on the gradient. */}
+      <main className="relative z-10 mx-auto -mt-16 w-full max-w-2xl px-4 pb-12 lg:-mt-20">
+        {conversation}
+
+        {/* ---- What sits under the conversation ----
+            Same column, same page, directly beneath the conversation that
+            produced it. The plan is never somewhere else. */}
+        <div ref={planRef} className="mt-3">
+          {submitted?.kind === 'submitted' ? (
+            <div className="space-y-3">
+              <SubmittedCard ui={submitted} />
+              <Disclaimer />
+            </div>
+          ) : planVisible && session && bundle ? (
+            <PlanFlow
+              bundle={bundle}
+              disabled={!planEditable}
+              onToggle={(key, included) =>
+                patchBundle(() => chatApi.toggleLine(session.token, key, included))
+              }
+              onSwap={(key, refId) => patchBundle(() => chatApi.swapLine(session.token, key, refId))}
+              onChooseHospital={(refId) =>
+                patchBundle(() => chatApi.chooseHospital(session.token, refId))
+              }
+              onSetNights={(nights) => patchBundle(() => chatApi.setNights(session.token, nights))}
+              contactForm={
+                <ContactForm
+                  submitting={busy}
+                  totalSgd={bundle.totals.totalSgd}
+                  onSubmit={async (submission) => {
+                    setBusy(true)
+                    try {
+                      setSession(await chatApi.submit(session.token, submission))
+                    } catch (error) {
+                      toast.error('We could not submit your request', {
+                        description: describe(error, 'Please try again in a moment.'),
+                      })
+                    } finally {
+                      setBusy(false)
+                    }
+                  }}
+                />
+              }
+              disclaimer={<Disclaimer />}
+            />
+          ) : (
+            <PlanPlaceholder stage={stage} />
+          )}
+        </div>
+      </main>
     </div>
   )
 }
@@ -530,8 +559,8 @@ function SiteHeader({ onRestart, showRestart }: { onRestart: () => void; showRes
   return (
     <header className="sticky top-0 z-30 border-b border-slate-200 bg-white/95 backdrop-blur">
       {/* Aligned to the content column, not the viewport — the whole page is
-          one centred column now, and a logo floating far to its left reads as
-          a different page from the one underneath it. */}
+          one centred column, and a logo floating far to its left reads as a
+          different page from the one underneath it. */}
       <div className="mx-auto flex w-full max-w-2xl items-center gap-3 px-4 py-3">
         <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-brand-500 to-teal-500 text-white">
           <ShieldCheck className="h-5 w-5" />

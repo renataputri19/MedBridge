@@ -21,7 +21,6 @@ import type {
   ActivityEvent,
   ActivityType,
   AiExtraction,
-  DoctorReview,
   Inquiry,
   InquiryStatus,
   ItineraryCostLine,
@@ -342,6 +341,11 @@ const ACTIVITY_TEMPLATES: Record<
   QUOTE_APPROVED: { actor: 'STAFF', level: 'success', title: 'Quote approved' },
   ITINERARY_ISSUED: { actor: 'SYSTEM', level: 'success', title: 'Patient itinerary issued' },
   PATIENT_CONFIRMED: { actor: 'PATIENT', level: 'success', title: 'Patient confirmed booking' },
+  STAFF_CONFIRMED_FOR_PATIENT: {
+    actor: 'STAFF',
+    level: 'success',
+    title: 'Confirmed on behalf of the patient',
+  },
   STATUS_CHANGED: { actor: 'SYSTEM', level: 'info', title: 'Pipeline status changed' },
   MESSAGE_SENT: { actor: 'STAFF', level: 'info', title: 'Reply sent to patient' },
   // A partner edited catalogue data shared with other facilities. Warning
@@ -424,7 +428,7 @@ const SEED_SPECS: SeedSpec[] = [
     hospitalId: HOSPITAL_IDS.awalBros,
     doctorId: DOCTOR_IDS.siregar,
     procedureId: PROCEDURE_IDS.cataract,
-    status: 'DOCTOR_REVIEW_REQUIRED',
+    status: 'HOSPITAL_REVIEW_REQUIRED',
     priority: 'HIGH',
     channel: 'WEB',
     sourceMessage:
@@ -590,14 +594,12 @@ export interface SeededInquiry {
   inquiry: Inquiry
   extraction: AiExtraction | null
   quote: Quote | null
-  doctorReview: DoctorReview | null
 }
 
 export function seedInquiries(): SeededInquiry[] {
   return SEED_SPECS.map((spec) => {
     const inquiryId = uuid()
     const createdAt = minutesAgo(spec.minutesOld)
-    const procedure = spec.procedureId ? procedureMap.get(spec.procedureId)! : null
 
     // Extraction only exists once Hermes has actually returned — a case still
     // sitting in NEW_INQUIRY or AI_PROCESSING has no structured record yet.
@@ -648,29 +650,6 @@ export function seedInquiries(): SeededInquiry[] {
       }
     }
 
-    // Clinical sign-off record exists once a procedure flagged for review lands.
-    const doctorReview: DoctorReview | null =
-      procedure?.requiresDoctorReview && spec.doctorId
-        ? {
-            id: uuid(),
-            inquiryId,
-            doctorId: spec.doctorId,
-            decision: spec.status === 'DOCTOR_REVIEW_REQUIRED' ? 'PENDING' : 'CLEARED',
-            clinicalNotes:
-              spec.status === 'DOCTOR_REVIEW_REQUIRED'
-                ? ''
-                : 'Records reviewed. Patient suitable for day-surgery pathway. No contraindications identified.',
-            requiredPreOpTests:
-              procedure.category === 'OPHTHALMOLOGY'
-                ? ['Corneal topography', 'Biometry (IOL Master)', 'Blood glucose']
-                : ['Full blood count', 'ECG', 'Coagulation profile'],
-            reviewedAt:
-              spec.status === 'DOCTOR_REVIEW_REQUIRED'
-                ? null
-                : minutesAgo(Math.max(spec.minutesOld - 45, 1)),
-          }
-        : null
-
     const inquiry: Inquiry = {
       id: inquiryId,
       reference: nextReference(),
@@ -689,7 +668,7 @@ export function seedInquiries(): SeededInquiry[] {
       updatedAt: minutesAgo(Math.max(spec.minutesOld - 12, 0)),
     }
 
-    return { inquiry, extraction, quote, doctorReview }
+    return { inquiry, extraction, quote }
   })
 }
 

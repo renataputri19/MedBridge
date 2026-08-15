@@ -51,11 +51,6 @@ class Inquiry extends Model
         return $this->hasOne(Quote::class);
     }
 
-    public function doctorReview(): HasOne
-    {
-        return $this->hasOne(DoctorReview::class);
-    }
-
     public function events(): HasMany
     {
         return $this->hasMany(ActivityEvent::class);
@@ -162,7 +157,7 @@ class Inquiry extends Model
     {
         $this->loadMissing([
             'patient', 'hospital', 'doctor', 'procedure',
-            'aiExtraction', 'quote.lineItems', 'doctorReview',
+            'aiExtraction', 'quote.lineItems',
         ]);
 
         return array_merge($this->toApi(), [
@@ -172,7 +167,6 @@ class Inquiry extends Model
             'procedure' => $this->procedure?->toApi(),
             'aiExtraction' => $this->aiExtraction?->toApi(),
             'quote' => $this->quote?->toApi(),
-            'doctorReview' => $this->doctorReview?->toApi(),
         ]);
     }
 }

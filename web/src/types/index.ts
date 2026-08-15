@@ -20,7 +20,6 @@ export const INQUIRY_STATUSES = [
   'AI_PROCESSING',
   'AI_ITINERARY_READY',
   'HOSPITAL_REVIEW_REQUIRED',
-  'DOCTOR_REVIEW_REQUIRED',
   'QUOTE_APPROVED',
   'PATIENT_CONFIRMATION_PENDING',
   'CONFIRMED_BOOKING',
@@ -302,22 +301,6 @@ export interface QuoteTotals {
 }
 
 /* -------------------------------------------------------------------------- */
-/* Doctor review                                                               */
-/* -------------------------------------------------------------------------- */
-
-export type DoctorReviewDecision = 'PENDING' | 'CLEARED' | 'NEEDS_CONSULT' | 'DECLINED'
-
-export interface DoctorReview {
-  id: UUID
-  inquiryId: UUID
-  doctorId: UUID | null
-  decision: DoctorReviewDecision
-  clinicalNotes: string
-  requiredPreOpTests: string[]
-  reviewedAt: ISODateTime | null
-}
-
-/* -------------------------------------------------------------------------- */
 /* Inquiry                                                                     */
 /* -------------------------------------------------------------------------- */
 
@@ -380,7 +363,6 @@ export interface InquiryDetail extends Inquiry {
   procedure: Procedure | null
   aiExtraction: AiExtraction | null
   quote: Quote | null
-  doctorReview: DoctorReview | null
 }
 
 /* -------------------------------------------------------------------------- */
@@ -403,6 +385,8 @@ export type ActivityType =
   | 'QUOTE_APPROVED'
   | 'ITINERARY_ISSUED'
   | 'PATIENT_CONFIRMED'
+  /** Staff recorded the patient's acceptance, rather than the patient clicking it. */
+  | 'STAFF_CONFIRMED_FOR_PATIENT'
   | 'STATUS_CHANGED'
   | 'MESSAGE_SENT'
   /** A partner edited catalogue data shared with other facilities. */
@@ -632,32 +616,6 @@ export interface PartnerPortal extends PartnerSummary {
   bookings: PartnerBooking[]
   catalogue: PartnerCatalogue
   disclaimer: string
-}
-
-/**
- * One case waiting on this hospital's clinical sign-off.
- *
- * Carries no inquiry UUID and no contact details — the same rule the bookings
- * list follows. `reference` is both the label a coordinator quotes on the phone
- * and the address the decision is posted to, which is why there is no id here
- * to miss.
- */
-export interface PartnerReviewRow {
-  reference: string
-  patientFirstName: string
-  procedureName: string
-  doctorName: string | null
-  doctorId: UUID | null
-  reviewReasons: ReviewReason[]
-  symptomKeywords: string[]
-  requestedAt: ISODateTime | null
-  decision: DoctorReviewDecision
-}
-
-export interface PartnerReviewQueue {
-  hospitalId: UUID
-  hospitalName: string
-  pending: PartnerReviewRow[]
 }
 
 /**

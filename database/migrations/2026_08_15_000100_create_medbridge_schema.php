@@ -107,7 +107,16 @@ return new class extends Migration
             $table->decimal('batam_price_sgd', 10, 2);
             $table->unsignedSmallInteger('treatment_days');
             $table->unsignedSmallInteger('recovery_nights');
-            // Drives the clinical gate: these always escalate to a doctor.
+            /*
+             * Marks a procedure as high-risk, which adds HIGH_RISK_PROCEDURE to
+             * the gate's reasons. It no longer routes anywhere of its own: there
+             * was a `doctor_reviews` table and a DOCTOR_REVIEW_REQUIRED state
+             * that blocked approval until a clinician signed the case off in the
+             * app, and that modelled a decision this system does not make.
+             * Whether a patient is fit for surgery is settled between the
+             * hospital and the patient, off MedBridge. All the state did here
+             * was strand cases short of the approval that starts the money flow.
+             */
             $table->boolean('requires_doctor_review')->default(false);
             // Free-text aliases Hermes and the keyword matcher can map onto.
             $table->json('synonyms')->nullable();
@@ -424,20 +433,6 @@ return new class extends Migration
             $table->foreign('quote_id')->references('id')->on('quotes')->cascadeOnDelete();
         });
 
-        Schema::create('doctor_reviews', function (Blueprint $table) {
-            $table->uuid('id')->primary();
-            $table->uuid('inquiry_id');
-            $table->uuid('doctor_id')->nullable();
-            $table->string('decision')->default('PENDING');
-            $table->text('clinical_notes')->default('');
-            $table->json('required_pre_op_tests');
-            $table->dateTime('reviewed_at')->nullable();
-            $table->timestamps();
-
-            $table->foreign('inquiry_id')->references('id')->on('inquiries')->cascadeOnDelete();
-            $table->foreign('doctor_id')->references('id')->on('doctors');
-        });
-
         /* ---------------------------------------------------------------- */
         /* Audit + messaging                                                 */
         /* ---------------------------------------------------------------- */
@@ -505,7 +500,6 @@ return new class extends Migration
         Schema::dropIfExists('messages');
         Schema::dropIfExists('message_threads');
         Schema::dropIfExists('activity_events');
-        Schema::dropIfExists('doctor_reviews');
         Schema::dropIfExists('quote_line_items');
         Schema::dropIfExists('quotes');
         Schema::dropIfExists('ai_extractions');

@@ -12,8 +12,6 @@ import type {
   ActivityEvent,
   AnalyticsSummary,
   DashboardKpis,
-  DoctorReview,
-  DoctorReviewDecision,
   DoctorSummary,
   FerryRoute,
   GroundTransport,
@@ -66,7 +64,6 @@ class MockDatabase {
   private inquiries: Inquiry[] = []
   private extractions = new Map<UUID, SeededInquiry['extraction']>()
   private quotes = new Map<UUID, Quote>()
-  private doctorReviews = new Map<UUID, DoctorReview>()
   private activity: ActivityEvent[] = []
   private threads: MessageThread[] = []
   private listeners = new Set<Listener>()
@@ -81,9 +78,6 @@ class MockDatabase {
     this.extractions = new Map(seeded.map((s) => [s.inquiry.id, s.extraction]))
     this.quotes = new Map(
       seeded.filter((s) => s.quote).map((s) => [s.inquiry.id, s.quote!]),
-    )
-    this.doctorReviews = new Map(
-      seeded.filter((s) => s.doctorReview).map((s) => [s.inquiry.id, s.doctorReview!]),
     )
     this.activity = seedActivity(seeded)
     this.threads = seedThreads(seeded)
@@ -160,7 +154,6 @@ class MockDatabase {
       procedure: inquiry.procedureId ? procedureMap.get(inquiry.procedureId) ?? null : null,
       aiExtraction: this.extractions.get(inquiry.id) ?? null,
       quote: this.quotes.get(inquiry.id) ?? null,
-      doctorReview: this.doctorReviews.get(inquiry.id) ?? null,
     }
   }
 
@@ -399,6 +392,35 @@ class MockDatabase {
     return this.hydrate(inquiry)
   }
 
+  /**
+   * The patient's acceptance, recorded by staff rather than clicked by them.
+   *
+   * Mirrors `QuoteController::confirm`: only from an approved quote, and a
+   * distinct activity type from PATIENT_CONFIRMED so the audit trail keeps
+   * "they clicked it" and "we were told" apart.
+   */
+  confirmForPatient(inquiryId: UUID, confirmedByName: string): InquiryDetail | null {
+    const inquiry = this.inquiries.find((i) => i.id === inquiryId)
+    const quote = this.quotes.get(inquiryId)
+    if (!inquiry || !quote) return null
+    if (quote.status !== 'APPROVED') return null
+    if (!['QUOTE_APPROVED', 'PATIENT_CONFIRMATION_PENDING'].includes(inquiry.status)) return null
+
+    this.touch(inquiry, 'CONFIRMED_BOOKING')
+
+    this.pushActivity(
+      buildActivity({
+        type: 'STAFF_CONFIRMED_FOR_PATIENT',
+        inquiryId: inquiry.id,
+        inquiryReference: inquiry.reference,
+        description: `${confirmedByName} recorded the patient's acceptance.`,
+        payload: { reference: inquiry.reference, confirmed_by: confirmedByName },
+      }),
+    )
+
+    return this.hydrate(inquiry)
+  }
+
   rejectQuote(inquiryId: UUID, reason: string): InquiryDetail | null {
     const inquiry = this.inquiries.find((i) => i.id === inquiryId)
     const quote = this.quotes.get(inquiryId)
@@ -420,53 +442,6 @@ class MockDatabase {
         payload: { quote_id: quote.id, reason },
       }),
     )
-
-    return this.hydrate(inquiry)
-  }
-
-  submitDoctorReview(
-    inquiryId: UUID,
-    input: { decision: DoctorReviewDecision; clinicalNotes: string; doctorId: UUID | null },
-  ): InquiryDetail | null {
-    const inquiry = this.inquiries.find((i) => i.id === inquiryId)
-    if (!inquiry) return null
-
-    const existing = this.doctorReviews.get(inquiryId)
-    const review: DoctorReview = {
-      id: existing?.id ?? uuid(),
-      inquiryId,
-      doctorId: input.doctorId ?? existing?.doctorId ?? null,
-      decision: input.decision,
-      clinicalNotes: input.clinicalNotes,
-      requiredPreOpTests: existing?.requiredPreOpTests ?? [],
-      reviewedAt: new Date().toISOString(),
-    }
-    this.doctorReviews.set(inquiryId, review)
-
-    const doctor = review.doctorId ? doctorMap.get(review.doctorId) : null
-
-    this.pushActivity(
-      buildActivity({
-        type: 'DOCTOR_REVIEW_SUBMITTED',
-        inquiryId: inquiry.id,
-        inquiryReference: inquiry.reference,
-        level: input.decision === 'DECLINED' ? 'warning' : 'success',
-        description: `${doctor?.fullName ?? 'Reviewing doctor'} marked this case ${input.decision.replace('_', ' ').toLowerCase()}.`,
-        payload: {
-          decision: input.decision,
-          doctor_id: review.doctorId,
-          reviewed_at: review.reviewedAt,
-        },
-      }),
-    )
-
-    if (input.decision === 'CLEARED') {
-      this.touch(inquiry, 'HOSPITAL_REVIEW_REQUIRED')
-    } else if (input.decision === 'DECLINED') {
-      this.touch(inquiry, 'HUMAN_TAKEOVER')
-    } else {
-      this.touch(inquiry)
-    }
 
     return this.hydrate(inquiry)
   }
@@ -578,16 +553,12 @@ class MockDatabase {
   listDoctorSummaries(): DoctorSummary[] {
     return doctors.map((doctor) => {
       const cases = this.inquiries.filter((i) => i.doctorId === doctor.id)
-      const reviews = cases
-        .map((i) => this.doctorReviews.get(i.id))
-        .filter((r): r is DoctorReview => Boolean(r))
-
       return {
         doctor,
         hospitalName: hospitalMap.get(doctor.hospitalId)?.name ?? 'Unassigned',
         assignedCaseCount: cases.length,
-        pendingReviewCount: cases.filter((i) => i.status === 'DOCTOR_REVIEW_REQUIRED').length,
-        clearedCount: reviews.filter((r) => r.decision === 'CLEARED').length,
+        pendingReviewCount: cases.filter((i) => i.status === 'HOSPITAL_REVIEW_REQUIRED').length,
+        clearedCount: cases.filter((i) => i.status === 'QUOTE_APPROVED').length,
         completedCount: cases.filter((i) => i.status === 'COMPLETED').length,
       }
     })

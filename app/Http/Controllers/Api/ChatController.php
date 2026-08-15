@@ -6,7 +6,6 @@ use App\Http\Controllers\Controller;
 use App\Models\ActivityEvent;
 use App\Models\AiExtraction;
 use App\Models\ChatSession;
-use App\Models\DoctorReview;
 use App\Models\Hospital;
 use App\Models\Inquiry;
 use App\Models\Message;
@@ -331,16 +330,6 @@ class ChatController extends Controller
             ]);
 
             $quote = $this->bundles->persistQuote($inquiry, $lines, $benchmark);
-
-            if (in_array('HIGH_RISK_PROCEDURE', $gate['reasons'], true)) {
-                DoctorReview::create([
-                    'inquiry_id' => $inquiry->id,
-                    'doctor_id' => $inquiry->doctor_id,
-                    'decision' => 'PENDING',
-                    'clinical_notes' => '',
-                    'required_pre_op_tests' => [],
-                ]);
-            }
 
             $thread = MessageThread::create([
                 'patient_id' => $patient->id,

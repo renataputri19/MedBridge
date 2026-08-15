@@ -88,6 +88,54 @@ class QuoteController extends Controller
     }
 
     /**
+     * POST /inquiries/{id}/confirm — the patient said yes, recorded by staff.
+     *
+     * The patient's own route is `ItineraryController::confirm`, reached from
+     * their pass. This is the same destination by a different hand: a
+     * coordinator who took the confirmation over the phone, or is walking the
+     * pipeline through without opening the private link.
+     *
+     * The two are DELIBERATELY not the same event. `PATIENT_CONFIRMED` means
+     * the patient clicked it themselves; `STAFF_CONFIRMED_FOR_PATIENT` carries
+     * the staff name, because "who told us this patient is coming" is exactly
+     * the question an audit trail exists to answer, and CONFIRMED_BOOKING is
+     * what the commission figures count as committed.
+     *
+     * Only reachable from an approved quote. Confirming something never offered
+     * would put revenue in the committed column for a trip no patient has seen.
+     */
+    public function confirm(Request $request, string $inquiryId): JsonResponse
+    {
+        $data = $request->validate([
+            'confirmedByName' => ['required', 'string', 'min:2', 'max:120'],
+        ]);
+
+        $inquiry = $this->inquiry($inquiryId);
+        $quote = $this->quoteFor($inquiryId);
+
+        if ($quote->status !== 'APPROVED') {
+            abort(409, 'Only an approved quote can be confirmed.');
+        }
+
+        if (! in_array($inquiry->status, ['QUOTE_APPROVED', 'PATIENT_CONFIRMATION_PENDING'], true)) {
+            abort(409, 'This case is not waiting on a patient confirmation.');
+        }
+
+        $inquiry->update(['status' => 'CONFIRMED_BOOKING']);
+
+        ActivityEvent::record(
+            'STAFF_CONFIRMED_FOR_PATIENT', 'STAFF',
+            'Confirmed on the patient\'s behalf',
+            $data['confirmedByName'].' recorded the patient\'s acceptance.',
+            ['reference' => $inquiry->reference, 'confirmed_by' => $data['confirmedByName']],
+            $inquiry,
+            'success',
+        );
+
+        return response()->json($inquiry->fresh()->toApiDetail());
+    }
+
+    /**
      * POST /inquiries/{id}/quote/approve — the gate.
      *
      * A human, named, pressing a button. Everything downstream of a patient
@@ -106,12 +154,17 @@ class QuoteController extends Controller
             abort(409, 'This quote has already been approved.');
         }
 
-        // A case still waiting on clinical sign-off cannot be released by
-        // operations, however confident anyone is about the price.
-        if ($inquiry->status === 'DOCTOR_REVIEW_REQUIRED') {
-            abort(409, 'This case needs clinical sign-off before it can be approved.');
-        }
-
+        /*
+         * There is no clinical-sign-off precondition here any more. It used to
+         * refuse while the case sat at DOCTOR_REVIEW_REQUIRED, waiting on a
+         * doctor to clear it in-app — a step that belongs to the hospital and
+         * the patient, not to this system, and that in practice only stranded
+         * cases short of the approval that starts the commercial flow.
+         *
+         * What has NOT changed: a named human still presses this button, it is
+         * still the only route that mints an itinerary token, and there is
+         * still no bulk or automatic variant.
+         */
         DB::transaction(function () use ($inquiry, $quote, $data) {
             $quote->update([
                 'status' => 'APPROVED',

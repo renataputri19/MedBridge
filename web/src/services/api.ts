@@ -14,7 +14,6 @@ import type {
   ChatBundle,
   ChatSession,
   ChatSubmission,
-  DoctorReviewDecision,
   Doctor,
   FerryRoute,
   GroundTransport,
@@ -25,7 +24,6 @@ import type {
   InquiryStatus,
   PartnerPortal,
   PartnerProcedureRow,
-  PartnerReviewQueue,
   PartnerSummary,
   PartnerType,
   PatientItinerary,
@@ -167,6 +165,24 @@ export const quotesApi = {
       },
     ),
 
+  /**
+   * Record the patient's acceptance from the operations side.
+   *
+   * The patient's own route is `itineraryApi.confirm`. This is the same
+   * destination for a coordinator who was told over the phone, and it is a
+   * distinct audit event so the two never blur together.
+   */
+  confirm: (inquiryId: UUID, confirmedByName: string) =>
+    withFallback<InquiryDetail>(
+      () => request(`/inquiries/${inquiryId}/confirm`, { method: 'POST', body: { confirmedByName } }),
+      async () => {
+        await sleep(LATENCY_MS)
+        const detail = mockDb.confirmForPatient(inquiryId, confirmedByName)
+        if (!detail) throw new Error('Inquiry not found')
+        return detail
+      },
+    ),
+
   reject: (inquiryId: UUID, reason: string) =>
     withFallback<InquiryDetail>(
       () => request(`/inquiries/${inquiryId}/quote/reject`, { method: 'POST', body: { reason } }),
@@ -178,15 +194,6 @@ export const quotesApi = {
       },
     ),
 }
-
-/*
- * Clinical sign-off is NOT here.
- *
- * It used to be — `POST /inquiries/{id}/doctor-review`, called from the
- * operations portal, unscoped. Deciding whether a patient is suitable for a
- * procedure belongs to the facility that would perform it, so it moved to
- * `partnersApi.submitReview` below and is addressed by hospital + reference.
- */
 
 /* -------------------------------------------------------------------------- */
 /* Activity                                                                    */
@@ -375,31 +382,6 @@ export const partnersApi = {
       method: 'PATCH',
       body: patch,
     }),
-
-  /* -- Clinical sign-off, by the facility performing the procedure -------- */
-
-  /**
-   * Cases waiting on this hospital. Addressed by reference on the write, not by
-   * inquiry id — a partner is never handed our primary keys, so there is no
-   * UUID in this payload to route with.
-   */
-  reviewQueue: (hospitalId: UUID) =>
-    request<PartnerReviewQueue>(`/partners/hospital/${hospitalId}/reviews`),
-
-  submitReview: (
-    hospitalId: UUID,
-    reference: string,
-    body: {
-      decision: DoctorReviewDecision
-      clinicalNotes: string
-      doctorId?: UUID | null
-      requiredPreOpTests?: string[]
-    },
-  ) =>
-    request<{ reference: string; decision: DoctorReviewDecision; status: InquiryStatus }>(
-      `/partners/hospital/${hospitalId}/reviews/${reference}`,
-      { method: 'POST', body },
-    ),
 
   updateHotelRate: (hotelId: UUID, nightlyRateSgd: number) =>
     request<Hotel>(`/partners/hotel/${hotelId}/rate`, {

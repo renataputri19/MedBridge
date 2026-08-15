@@ -33,13 +33,14 @@ import { SavingsCallout } from '@/components/shared/SavingsCallout'
 import {
   useAddLineItem,
   useApproveQuote,
+  useConfirmForPatient,
   useRejectQuote,
   useRemoveLineItem,
   useUpdateLineItem,
 } from '@/hooks/queries'
 import { useAppStore } from '@/store/useAppStore'
 import { computeTotals, lineTotal } from '@/mock/generators'
-import { QUOTE_CATEGORY_META } from '@/lib/constants'
+import { CLOSED_WON_STATUSES, QUOTE_CATEGORY_META } from '@/lib/constants'
 import { formatIdr, formatSgd } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import type { InquiryDetail, QuoteCategory, QuoteLineItem } from '@/types'
@@ -84,6 +85,7 @@ export function QuoteBuilder({ detail }: QuoteBuilderProps) {
   const addLineItem = useAddLineItem(detail.id)
   const removeLineItem = useRemoveLineItem(detail.id)
   const rejectQuote = useRejectQuote(detail.id)
+  const confirmForPatient = useConfirmForPatient(detail.id)
 
   const approveQuote = useApproveQuote(detail.id, {
     onSuccess: () => {
@@ -113,8 +115,8 @@ export function QuoteBuilder({ detail }: QuoteBuilderProps) {
   const totals = computeTotals(quote)
   const approved = quote.status === 'APPROVED'
   const locked = approved || quote.status === 'REJECTED'
-  const awaitingHospital = detail.status === 'DOCTOR_REVIEW_REQUIRED'
-
+  // CONFIRMED_BOOKING and everything past it — the patient has committed.
+  const confirmed = CLOSED_WON_STATUSES.includes(detail.status)
   const grouped = CATEGORY_ORDER.map((category) => ({
     category,
     items: quote.lineItems.filter((item) => item.category === category),
@@ -242,17 +244,47 @@ export function QuoteBuilder({ detail }: QuoteBuilderProps) {
           <div className="flex flex-wrap items-center gap-3 rounded-lg border border-emerald-200 bg-emerald-50 p-4">
             <CheckCircle2 className="h-5 w-5 shrink-0 text-emerald-600" />
             <div className="min-w-0 flex-1">
-              <p className="text-sm font-semibold text-emerald-900">Patient Itinerary Ready</p>
+              <p className="text-sm font-semibold text-emerald-900">
+                {confirmed ? 'Confirmed by the patient' : 'Patient Itinerary Ready'}
+              </p>
               <p className="text-xs text-emerald-700">
-                Secure link issued. The token carries no database ID or personal data.
+                {confirmed
+                  ? 'This trip counts as committed. The patient is travelling.'
+                  : 'Secure link issued. The token carries no database ID or personal data.'}
               </p>
             </div>
             {detail.itineraryToken && (
-              <Button asChild variant="success" size="sm">
+              <Button asChild variant="outline" size="sm">
                 <Link to={`/itinerary/${detail.itineraryToken}`}>
                   Open Patient Pass
                   <ExternalLink className="h-3.5 w-3.5" />
                 </Link>
+              </Button>
+            )}
+            {/*
+              Approval is our decision; confirmation is the patient's. This
+              records theirs when it arrived by phone rather than through the
+              pass, and it is what moves the case into the committed column the
+              commission figures count — so it stays a separate, named action
+              rather than something approval does silently.
+            */}
+            {!confirmed && (
+              <Button
+                variant="success"
+                size="sm"
+                onClick={() =>
+                  confirmForPatient.mutate(operatorName, {
+                    onSuccess: () =>
+                      toast.success('Confirmed', {
+                        description: 'This trip now counts as committed.',
+                      }),
+                    onError: () => toast.error('Could not confirm. Please retry.'),
+                  })
+                }
+                disabled={confirmForPatient.isPending}
+              >
+                {confirmForPatient.isPending ? <Loader2 className="animate-spin" /> : <CheckCircle2 />}
+                Mark as confirmed
               </Button>
             )}
           </div>
@@ -263,25 +295,6 @@ export function QuoteBuilder({ detail }: QuoteBuilderProps) {
               Quote rejected
             </p>
             {quote.notes && <p className="mt-1 text-xs text-rose-700">{quote.notes}</p>}
-          </div>
-        ) : awaitingHospital ? (
-          /*
-             Approving here would 409 — `QuoteController::approve` refuses while
-             the case sits at DOCTOR_REVIEW_REQUIRED. Sign-off is the treating
-             hospital's now, so this says who it is waiting on instead of
-             offering a button that cannot work.
-          */
-          <div className="flex items-start gap-3 rounded-lg border border-orange-200 bg-orange-50 p-4">
-            <Stethoscope className="mt-0.5 h-5 w-5 shrink-0 text-orange-600" />
-            <div className="min-w-0">
-              <p className="text-sm font-semibold text-orange-900">
-                Waiting on clinical sign-off from {detail.hospital.name}
-              </p>
-              <p className="text-xs text-orange-700">
-                The treating hospital decides whether the patient is suitable before this quote
-                can be approved. It appears in their partner portal.
-              </p>
-            </div>
           </div>
         ) : (
           <div className="flex flex-col gap-3 rounded-lg border border-amber-200 bg-amber-50 p-4 sm:flex-row sm:items-center">

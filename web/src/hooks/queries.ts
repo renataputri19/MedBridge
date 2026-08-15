@@ -27,7 +27,6 @@ import {
 } from '@/services/api'
 import { useAppStore } from '@/store/useAppStore'
 import type {
-  DoctorReviewDecision,
   InquiryDetail,
   InquiryStatus,
   PartnerType,
@@ -46,7 +45,6 @@ export const queryKeys = {
   quotes: ['quotes'] as const,
   partners: (type: string) => ['partners', type] as const,
   partner: (type: string, id: UUID) => ['partners', type, id] as const,
-  reviewQueue: (hospitalId: UUID) => ['partners', 'hospital', hospitalId, 'reviews'] as const,
   saas: ['saas', 'summary'] as const,
 }
 
@@ -351,6 +349,27 @@ export function useApproveQuote(
   })
 }
 
+/**
+ * Record the patient's acceptance from operations.
+ *
+ * Moves the case to CONFIRMED_BOOKING, which is what the commission figures
+ * count as committed — so the dashboard, the SaaS summary and every partner
+ * portal change with it, not just this page.
+ */
+export function useConfirmForPatient(inquiryId: UUID) {
+  const invalidate = useInquiryInvalidator()
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (confirmedByName: string) => quotesApi.confirm(inquiryId, confirmedByName),
+    onSuccess: (detail) => {
+      queryClient.setQueryData(queryKeys.inquiry(inquiryId), detail)
+      invalidate(inquiryId)
+      void queryClient.invalidateQueries({ queryKey: queryKeys.saas })
+      void queryClient.invalidateQueries({ queryKey: ['partners'] })
+    },
+  })
+}
+
 export function useRejectQuote(inquiryId: UUID) {
   const invalidate = useInquiryInvalidator()
   const queryClient = useQueryClient()
@@ -359,42 +378,6 @@ export function useRejectQuote(inquiryId: UUID) {
     onSuccess: (detail) => {
       queryClient.setQueryData(queryKeys.inquiry(inquiryId), detail)
       invalidate(inquiryId)
-    },
-  })
-}
-
-/* -------------------------------------------------------------------------- */
-/* Clinical sign-off — the hospital's, not operations'                         */
-/* -------------------------------------------------------------------------- */
-
-export function useReviewQueue(hospitalId: UUID | undefined) {
-  return useQuery({
-    queryKey: queryKeys.reviewQueue(hospitalId ?? ''),
-    queryFn: () => partnersApi.reviewQueue(hospitalId!),
-    enabled: Boolean(hospitalId),
-    retry: false,
-  })
-}
-
-export function useSubmitReview(hospitalId: UUID) {
-  const queryClient = useQueryClient()
-  return useMutation({
-    mutationFn: ({
-      reference,
-      ...body
-    }: {
-      reference: string
-      decision: DoctorReviewDecision
-      clinicalNotes: string
-      doctorId?: UUID | null
-      requiredPreOpTests?: string[]
-    }) => partnersApi.submitReview(hospitalId, reference, body),
-    onSuccess: () => {
-      // The queue shrinks, and the case moves on — so the pipeline and the
-      // portal's own counts both go stale.
-      void queryClient.invalidateQueries({ queryKey: queryKeys.reviewQueue(hospitalId) })
-      void queryClient.invalidateQueries({ queryKey: ['partner'] })
-      void queryClient.invalidateQueries({ queryKey: ['inquiries'] })
     },
   })
 }

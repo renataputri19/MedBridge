@@ -103,14 +103,6 @@ export const STATUS_META: Record<InquiryStatus, StatusMeta> = {
     description: 'Operations staff must verify pricing and availability.',
     order: 3,
   },
-  DOCTOR_REVIEW_REQUIRED: {
-    label: 'Doctor Review Required',
-    short: 'Doctor Review',
-    className: 'bg-orange-100 text-orange-900 ring-orange-200',
-    dot: 'bg-orange-500',
-    description: 'Clinical sign-off needed before the quote can be released.',
-    order: 4,
-  },
   QUOTE_APPROVED: {
     label: 'Quote Approved',
     short: 'Approved',
@@ -167,7 +159,6 @@ export const KANBAN_LANES: InquiryStatus[] = [
   'AI_PROCESSING',
   'AI_ITINERARY_READY',
   'HOSPITAL_REVIEW_REQUIRED',
-  'DOCTOR_REVIEW_REQUIRED',
   'QUOTE_APPROVED',
   'PATIENT_CONFIRMATION_PENDING',
   'CONFIRMED_BOOKING',
@@ -179,7 +170,6 @@ export const KANBAN_LANES: InquiryStatus[] = [
 /** Statuses that count as "needs a human right now". */
 export const REVIEW_STATUSES: InquiryStatus[] = [
   'HOSPITAL_REVIEW_REQUIRED',
-  'DOCTOR_REVIEW_REQUIRED',
   'HUMAN_TAKEOVER',
 ]
 

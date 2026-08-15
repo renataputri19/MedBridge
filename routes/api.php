@@ -8,7 +8,6 @@ use App\Http\Controllers\Api\MessageController;
 use App\Http\Controllers\Api\OperationsController;
 use App\Http\Controllers\Api\PartnerCatalogueController;
 use App\Http\Controllers\Api\PartnerController;
-use App\Http\Controllers\Api\PartnerReviewController;
 use App\Http\Controllers\Api\QuoteController;
 use Illuminate\Support\Facades\Route;
 
@@ -98,20 +97,6 @@ Route::prefix('v1')->group(function () {
     Route::patch('partners/hospital/{id}/procedures/{procedureId}', [PartnerCatalogueController::class, 'updateHospitalProcedure']);
     Route::patch('partners/hospital/{id}/doctors/{doctorId}', [PartnerCatalogueController::class, 'updateDoctor']);
 
-    /*
-     * Clinical sign-off, by the facility that would perform the procedure.
-     *
-     * This was `POST inquiries/{id}/doctor-review` on the operations portal,
-     * where it was unscoped — anyone could clear anyone's case. MedBridge does
-     * not employ the surgeon, so the judgement and the liability belong to the
-     * treating hospital. Addressed by reference, not inquiry UUID: partners are
-     * never given our primary keys.
-     *
-     * It still releases nothing. CLEARED hands the case back to a coordinator at
-     * HOSPITAL_REVIEW_REQUIRED, and only `quote/approve` below mints a token.
-     */
-    Route::get('partners/hospital/{id}/reviews', [PartnerReviewController::class, 'index']);
-    Route::post('partners/hospital/{id}/reviews/{reference}', [PartnerReviewController::class, 'store']);
     Route::patch('partners/hotel/{id}/rate', [PartnerCatalogueController::class, 'updateHotel']);
     Route::patch('partners/ferry/{id}/fare', [PartnerCatalogueController::class, 'updateFerry']);
     Route::patch('partners/transport/{id}/price', [PartnerCatalogueController::class, 'updateTransport']);
@@ -132,6 +117,16 @@ Route::prefix('v1')->group(function () {
     // can mint an itinerary token, and there is deliberately no bulk variant.
     Route::post('inquiries/{id}/quote/approve', [QuoteController::class, 'approve']);
     Route::post('inquiries/{id}/quote/reject', [QuoteController::class, 'reject']);
+
+    /*
+     * The patient said yes, recorded by staff.
+     *
+     * Same destination as `itinerary/{token}/confirm`, by a different hand —
+     * a coordinator who took the confirmation over the phone. It writes a
+     * different activity event on purpose, so the audit trail can still tell
+     * "the patient clicked it" from "we were told they agreed".
+     */
+    Route::post('inquiries/{id}/confirm', [QuoteController::class, 'confirm']);
 
     Route::get('messages/threads', [MessageController::class, 'threads']);
     Route::post('messages/threads/{id}/send', [MessageController::class, 'send']);

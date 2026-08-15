@@ -21,13 +21,13 @@ use Illuminate\Support\Collection;
  */
 class OperationsController extends Controller
 {
-    private const REVIEW_STATUSES = ['HOSPITAL_REVIEW_REQUIRED', 'DOCTOR_REVIEW_REQUIRED', 'HUMAN_TAKEOVER'];
+    private const REVIEW_STATUSES = ['HOSPITAL_REVIEW_REQUIRED', 'HUMAN_TAKEOVER'];
     private const CLOSED_WON = ['CONFIRMED_BOOKING', 'TRAVEL_READY', 'COMPLETED'];
 
     /** Pipeline order, used to make the funnel monotonic. */
     private const STATUS_ORDER = [
         'NEW_INQUIRY' => 0, 'AI_PROCESSING' => 1, 'AI_ITINERARY_READY' => 2,
-        'HOSPITAL_REVIEW_REQUIRED' => 3, 'DOCTOR_REVIEW_REQUIRED' => 4, 'QUOTE_APPROVED' => 5,
+        'HOSPITAL_REVIEW_REQUIRED' => 3, 'QUOTE_APPROVED' => 5,
         'PATIENT_CONFIRMATION_PENDING' => 6, 'CONFIRMED_BOOKING' => 7, 'TRAVEL_READY' => 8,
         'COMPLETED' => 9, 'HUMAN_TAKEOVER' => 3,
     ];
@@ -120,7 +120,7 @@ class OperationsController extends Controller
                     'doctor' => $doctor->toApi(),
                     'hospitalName' => $doctor->hospital?->name ?? '—',
                     'assignedCaseCount' => $cases->count(),
-                    'pendingReviewCount' => $cases->where('status', 'DOCTOR_REVIEW_REQUIRED')->count(),
+                    'pendingReviewCount' => $cases->where('status', 'HOSPITAL_REVIEW_REQUIRED')->count(),
                     'clearedCount' => $cases->whereIn('status', ['HOSPITAL_REVIEW_REQUIRED', 'QUOTE_APPROVED'])->count(),
                     'completedCount' => $cases->where('status', 'COMPLETED')->count(),
                 ];

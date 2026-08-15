@@ -555,14 +555,29 @@ class PatientChatTest extends TestCase
         $this->assertSame(0, Inquiry::count());
     }
 
-    public function test_a_high_risk_procedure_routes_to_a_doctor(): void
+    /**
+     * A high-risk procedure is flagged, and still lands on a coordinator.
+     *
+     * It used to route to its own DOCTOR_REVIEW_REQUIRED state and wait for a
+     * clinician to clear it in-app. That modelled a decision this system does
+     * not make — whether a patient is fit for surgery is settled between the
+     * hospital and the patient, off MedBridge — and in practice it only held
+     * cases short of the approval that starts the commercial flow.
+     *
+     * The reason survives on the record. The separate state does not.
+     */
+    public function test_a_high_risk_procedure_is_flagged_but_still_lands_on_a_coordinator(): void
     {
         $this->submitCase('OPH-LSK-01');   // LASIK: requires_doctor_review
 
         $inquiry = Inquiry::firstOrFail();
-        $this->assertSame('DOCTOR_REVIEW_REQUIRED', $inquiry->status);
+        $this->assertSame('HOSPITAL_REVIEW_REQUIRED', $inquiry->status);
         $this->assertContains('HIGH_RISK_PROCEDURE', $inquiry->aiExtraction->review_reasons);
-        $this->assertDatabaseHas('doctor_reviews', ['inquiry_id' => $inquiry->id, 'decision' => 'PENDING']);
+        $this->assertTrue((bool) $inquiry->aiExtraction->requires_human_review);
+
+        // And it still stops there on its own.
+        $this->assertNull($inquiry->itinerary_token);
+        $this->assertSame('DRAFT', $inquiry->quote->status);
     }
 
     public function test_a_routine_procedure_parks_at_hospital_review(): void
@@ -666,34 +681,95 @@ class PatientChatTest extends TestCase
         $this->assertNotNull($inquiry->token_expires_at);
     }
 
-    public function test_operations_cannot_approve_around_a_pending_doctor_review(): void
+    /**
+     * A coordinator can approve a high-risk case, and nothing blocks the flow.
+     *
+     * This replaces a test asserting the opposite. Approval used to 409 on a
+     * high-risk procedure until a doctor cleared it in-app, which meant those
+     * cases could never reach a quote, an itinerary or a commission line — the
+     * commercial flow stopped at a state nothing in the product could clear.
+     *
+     * A named human still presses the button, and it is still the only route
+     * that mints a token. There is simply no second gate in front of it.
+     */
+    public function test_a_named_human_can_approve_a_high_risk_case(): void
     {
         $this->submitCase('OPH-LSK-01');
         $inquiry = Inquiry::firstOrFail();
+
+        $this->assertNull($inquiry->itinerary_token, 'Nothing is minted before approval.');
 
         $this->postJson("/api/v1/inquiries/{$inquiry->id}/quote/approve", [
             'approvedByName' => 'Nadia Putri',
-        ])->assertStatus(409);
+        ])->assertOk();
 
-        $this->assertNull($inquiry->refresh()->itinerary_token);
+        $inquiry->refresh();
+        $this->assertSame('APPROVED', $inquiry->quote->status);
+        $this->assertSame('Nadia Putri', $inquiry->quote->approved_by_name);
+        $this->assertNotNull($inquiry->itinerary_token);
     }
 
-    public function test_a_doctor_clearing_a_case_does_not_release_it(): void
+    /**
+     * Operations can record a confirmation the patient gave off-system.
+     *
+     * Approval and confirmation stay two facts: we made an offer, and the
+     * patient accepted it. CONFIRMED_BOOKING is what the commission figures
+     * count as committed, so collapsing it into approval would report every
+     * offer as a sale.
+     */
+    public function test_staff_can_record_the_patients_confirmation(): void
+    {
+        $this->submitCase('DEN-IMP-01');
+        $inquiry = Inquiry::firstOrFail();
+
+        // Not before there is something to confirm.
+        $this->postJson("/api/v1/inquiries/{$inquiry->id}/confirm", ['confirmedByName' => 'Nadia Putri'])
+            ->assertStatus(409);
+
+        $this->postJson("/api/v1/inquiries/{$inquiry->id}/quote/approve", [
+            'approvedByName' => 'Nadia Putri',
+        ])->assertOk();
+
+        $this->assertSame('QUOTE_APPROVED', $inquiry->fresh()->status);
+
+        $this->postJson("/api/v1/inquiries/{$inquiry->id}/confirm", ['confirmedByName' => 'Nadia Putri'])
+            ->assertOk();
+
+        $this->assertSame('CONFIRMED_BOOKING', $inquiry->fresh()->status);
+
+        // Recorded as staff acting for the patient, never as the patient.
+        $this->assertDatabaseHas('activity_events', [
+            'inquiry_id' => $inquiry->id,
+            'type' => 'STAFF_CONFIRMED_FOR_PATIENT',
+            'actor' => 'STAFF',
+        ]);
+        $this->assertDatabaseMissing('activity_events', [
+            'inquiry_id' => $inquiry->id,
+            'type' => 'PATIENT_CONFIRMED',
+        ]);
+    }
+
+    /** Confirming needs a name too — someone vouched for this. */
+    public function test_recording_a_confirmation_needs_a_named_human(): void
+    {
+        $this->submitCase('DEN-IMP-01');
+        $inquiry = Inquiry::firstOrFail();
+        $this->postJson("/api/v1/inquiries/{$inquiry->id}/quote/approve", ['approvedByName' => 'Nadia Putri']);
+
+        $this->postJson("/api/v1/inquiries/{$inquiry->id}/confirm", [])->assertStatus(422);
+        $this->assertSame('QUOTE_APPROVED', $inquiry->fresh()->status);
+    }
+
+    /** Approval still requires a name — it is a person acting, not the system. */
+    public function test_approval_still_needs_a_named_human(): void
     {
         $this->submitCase('OPH-LSK-01');
         $inquiry = Inquiry::firstOrFail();
 
-        // Sign-off is the treating hospital's, addressed by reference — see
-        // PartnerReviewController. Operations has no route to clear a case.
-        $this->postJson(
-            "/api/v1/partners/hospital/{$inquiry->hospital_id}/reviews/{$inquiry->reference}",
-            ['decision' => 'CLEARED', 'clinicalNotes' => 'Corneal thickness adequate.'],
-        )->assertOk();
+        $this->postJson("/api/v1/inquiries/{$inquiry->id}/quote/approve", [])
+            ->assertStatus(422);
 
-        $inquiry->refresh();
-        // Cleared hands it back to operations — it does not approve anything.
-        $this->assertSame('HOSPITAL_REVIEW_REQUIRED', $inquiry->status);
-        $this->assertNull($inquiry->itinerary_token);
+        $this->assertNull($inquiry->refresh()->itinerary_token);
     }
 
     public function test_an_approved_quote_cannot_be_edited(): void
