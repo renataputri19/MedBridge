@@ -45,10 +45,14 @@ export default function App() {
           lands somewhere useful.
 
           Doctors and treatment pricing are partner-owned — they live in each
-          hospital's own portal. Patients is a tab on the pipeline now; the
-          per-case audit trail that used to be /ai-activity sits inside the case
-          it describes. Messages and Analytics are gone outright: the first
-          duplicated the patient chat, the second charted a handful of rows.
+          hospital's own portal. Patients is a tab on the pipeline now. Messages
+          and Analytics are gone outright: the first duplicated the patient
+          chat, the second charted a handful of rows.
+
+          /ai-activity redirects because the audit trail has no screen at all
+          any more. The backend still records every event and /api/v1/activity
+          still serves them — nothing stopped being written, it simply stopped
+          being rendered.
         */}
         <Route path="/doctors" element={<Navigate to="/hospital" replace />} />
         <Route path="/treatments" element={<Navigate to="/hospital" replace />} />

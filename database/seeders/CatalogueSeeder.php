@@ -755,4 +755,9 @@ class CatalogueSeeder extends Seeder
             ['id' => '3a86d0f4-15c9-4e27-b6a8-0d94f7e35c61', 'type' => 'PRIVATE_CAR', 'provider' => 'MedBridge Care Fleet', 'description' => 'Private air-conditioned sedan with English-speaking driver. Terminal pick-up, hospital and hotel transfers, return drop-off.', 'price_sgd' => 48, 'capacity' => 3],
             ['id' => '7d29e5b1-08a6-4c34-95f7-b21e60d84a39', 'type' => 'WHEELCHAIR_VAN', 'provider' => 'MedBridge Care Fleet', 'description' => 'Wheelchair-accessible van with ramp and trained assistant for reduced-mobility patients.', 'price_sgd' => 76, 'capacity' => 4],
             ['id' => 'e04b736a-5d18-49f2-8c60-1b73a95e20d4', 'type' => 'SHUTTLE', 'provider' => 'Hospital Partner Shuttle', 'description' => 'Shared scheduled shuttle between the ferry terminal and the partner hospital. Departs hourly.', 'price_sgd' => 18, 'capacity' => 12],
-            ['id' => '58f13c9e-7204-4a86-b0d5-9e62c14f8b37', 
+            ['id' => '58f13c9e-7204-4a86-b0d5-9e62c14f8b37', 'type' => 'AMBULANCE', 'provider' => 'Batam Emergency Medical Services', 'description' => 'Basic life-support ambulance with paramedic escort for post-operative or stretcher-bound transfers.', 'price_sgd' => 165, 'capacity' => 1],
+        ] as $row) {
+            GroundTransport::updateOrCreate(['id' => $row['id']], $row);
+        }
+    }
+}

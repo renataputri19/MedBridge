@@ -2,10 +2,12 @@
 
 namespace Tests\Feature;
 
+use App\Models\Doctor;
 use App\Models\Hospital;
 use App\Models\Hotel;
 use App\Models\Place;
 use App\Models\Procedure;
+use App\Services\BundleBuilder;
 use App\Support\Geo;
 use Database\Seeders\CatalogueSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -241,6 +243,64 @@ class PlanAccuracyTest extends TestCase
             );
         }
         $this->assertArrayNotHasKey('rating', $place->toApi());
+    }
+
+    /**
+     * The same rule, on the tables where breaking it would matter most.
+     *
+     * Hotels and places were already covered. Hospitals and doctors were not,
+     * and that is where the invented numbers actually lived: 4.8 out of 5 from
+     * 1,284 reviews, seeded onto a real hospital that anyone can look up, then
+     * drawn with a gold star in the patient's hospital picker. Nobody was
+     * surveyed. A patient cannot tell an invented rating from a real one, and
+     * this one sat next to the question of where to have an operation.
+     *
+     * It was not inert, either — the option list was ordered by it, so the
+     * made-up figure chose the default facility.
+     */
+    public function test_no_invented_rating_rides_on_a_hospital_or_a_doctor(): void
+    {
+        foreach (['hospitals' => ['rating', 'review_count'], 'doctors' => ['rating']] as $table => $columns) {
+            foreach ($columns as $column) {
+                $this->assertFalse(
+                    \Illuminate\Support\Facades\Schema::hasColumn($table, $column),
+                    "{$table}.{$column} is a number we would have to invent — link to Google instead.",
+                );
+            }
+        }
+
+        $hospital = Hospital::first();
+        foreach (['rating', 'reviewCount', 'reviews', 'userRatingsTotal'] as $mirrored) {
+            $this->assertArrayNotHasKey($mirrored, $hospital->toApi());
+        }
+        $this->assertArrayNotHasKey('rating', Doctor::first()->toApi());
+
+        // The replacement for the number is the link, so it has to be there.
+        $this->assertStringStartsWith('https://www.google.com/search?q=', $hospital->toApi()['searchUrl']);
+
+        // And nothing rated reaches the patient's hospital picker.
+        $procedure = Procedure::where('code', 'DEN-IMP-01')->firstOrFail();
+        foreach (app(BundleBuilder::class)->hospitalOptions($procedure) as $option) {
+            $this->assertArrayNotHasKey('rating', $option);
+        }
+    }
+
+    /**
+     * Order the patient sees facilities in, now that no rating decides it.
+     *
+     * Cheapest first is a fact we hold and already show. The test is here
+     * because the ordering key is load-bearing: it picks the default hospital,
+     * and silently falling back to row order would make the default arbitrary.
+     */
+    public function test_hospitals_are_offered_cheapest_first_for_the_procedure(): void
+    {
+        $procedure = Procedure::where('code', 'DEN-IMP-01')->firstOrFail();
+        $prices = array_column(app(BundleBuilder::class)->hospitalOptions($procedure), 'unitPriceSgd');
+
+        $sorted = $prices;
+        sort($sorted);
+
+        $this->assertSame($sorted, $prices, 'The hospital list is no longer cheapest-first.');
     }
 
     /**

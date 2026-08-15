@@ -94,4 +94,16 @@ function Row({
   children,
 }: {
   icon: typeof Phone
-  label:
+  label: string
+  children: React.ReactNode
+}) {
+  return (
+    <div className="flex items-center justify-between gap-3">
+      <dt className="flex shrink-0 items-center gap-1.5 text-xs text-slate-400">
+        <Icon className="h-3.5 w-3.5" />
+        {label}
+      </dt>
+      <dd className="min-w-0 truncate text-sm font-medium text-slate-700">{children}</dd>
+    </div>
+  )
+}

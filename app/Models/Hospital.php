@@ -17,7 +17,6 @@ class Hospital extends Model
 
     protected $casts = [
         'specialties' => 'array',
-        'rating' => 'float',
         'latitude' => 'float',
         'longitude' => 'float',
     ];
@@ -49,15 +48,14 @@ class Hospital extends Model
             'district' => $this->district,
             'address' => $this->address,
             'accreditation' => $this->accreditation,
-            'rating' => (float) $this->rating,
-            'reviewCount' => (int) $this->review_count,
             'specialties' => $this->specialties,
             'minutesFromTerminal' => (int) $this->minutes_from_terminal,
             'nearestTerminal' => $this->nearest_terminal,
             'latitude' => $this->latitude !== null ? (float) $this->latitude : null,
             'longitude' => $this->longitude !== null ? (float) $this->longitude : null,
             // A Google search by name, not a map pin. Google resolves the
-            // business and shows the live rating; we mirror none of it.
+            // business and shows the live rating and reviews; we store, mirror
+            // and invent none of it.
             'searchUrl' => $this->searchUrl(),
             'sourceUrl' => $this->sourceUrl(),
         ];

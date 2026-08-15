@@ -1,10 +1,8 @@
 import { Link, useParams } from 'react-router-dom'
 import { ArrowLeft, Clock, ExternalLink, FileWarning, Hospital, MapPin } from 'lucide-react'
 import { PatientPanel } from '@/components/inquiries/PatientPanel'
-import { AiExtractionPanel } from '@/components/inquiries/AiExtractionPanel'
 import { DoctorReviewPanel } from '@/components/inquiries/DoctorReviewPanel'
 import { QuoteBuilder } from '@/components/inquiries/QuoteBuilder'
-import { CaseActivity } from '@/components/inquiries/CaseActivity'
 import { StatusBadge } from '@/components/shared/StatusBadge'
 import { ChannelBadge } from '@/components/shared/ChannelBadge'
 import { EmptyState } from '@/components/shared/EmptyState'
@@ -13,8 +11,22 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Badge } from '@/components/ui/badge'
 import { useInquiry } from '@/hooks/queries'
-import { formatDateTime, formatSla } from '@/lib/format'
+import { formatDate, formatDateTime, formatSla } from '@/lib/format'
 import { cn } from '@/lib/utils'
+
+/**
+ * `preferred_window` is a date from the web chat ("2026-10-15") but free text
+ * from anywhere else ("Next 2–4 weeks"). Format what parses; pass through what
+ * does not, rather than rendering "Invalid Date" at a coordinator.
+ */
+function travelWindow(value: string): string | null {
+  const trimmed = value?.trim()
+  if (!trimmed) return null
+
+  return /^\d{4}-\d{2}-\d{2}/.test(trimmed) && !Number.isNaN(Date.parse(trimmed))
+    ? formatDate(trimmed)
+    : trimmed
+}
 
 export default function InquiryDetail() {
   const { id } = useParams<{ id: string }>()
@@ -48,6 +60,16 @@ export default function InquiryDetail() {
   }
 
   const sla = formatSla(detail.slaDueAt)
+  const extraction = detail.aiExtraction
+
+  const summary = [
+    detail.patient.fullName,
+    detail.procedure?.name ?? 'Awaiting classification',
+    extraction ? travelWindow(extraction.preferredWindow) : null,
+    extraction
+      ? `${extraction.travelPartySize} traveller${extraction.travelPartySize === 1 ? '' : 's'}`
+      : null,
+  ].filter(Boolean)
 
   return (
     <div className="space-y-5">
@@ -68,9 +90,13 @@ export default function InquiryDetail() {
               <ChannelBadge channel={detail.channel} />
               {detail.priority === 'URGENT' && <Badge variant="destructive">Urgent</Badge>}
             </div>
-            <p className="mt-1 text-sm text-slate-500">
-              {detail.patient.fullName} · {detail.procedure?.name ?? 'Awaiting classification'}
-            </p>
+            {/*
+              The trip facts moved up here from the extraction card. When the
+              patient travels and how many of them are travelling are the two
+              things a coordinator needs before touching anything else, and they
+              were buried in a panel whose other contents were duplicates.
+            */}
+            <p className="mt-1 text-sm text-slate-500">{summary.join(' · ')}</p>
           </div>
 
           <div className="flex shrink-0 flex-col items-start gap-1 sm:items-end">
@@ -153,6 +179,10 @@ export default function InquiryDetail() {
 
         {/* Right column */}
         <div className="space-y-6 lg:col-span-2">
-          <AiExtractionPanel extraction={detail.aiExtraction} />
           <QuoteBuilder detail={detail} />
-          <DoctorReviewPanel detail={detail} /
+          <DoctorReviewPanel detail={detail} />
+        </div>
+      </div>
+    </div>
+  )
+}

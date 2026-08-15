@@ -37,22 +37,39 @@ use Illuminate\Support\Facades\Log;
 class HermesClient
 {
     /**
+     * What each slot's question is asking for, in words the model can bind a
+     * bare answer to.
+     *
+     * This is EXTRACTION CONTEXT, not patient-facing prose — none of it is ever
+     * rendered. The question bank in ChatOrchestrator still owns every sentence
+     * the visitor reads (rule 6).
+     */
+    private const PENDING_SLOT_HINT = [
+        'procedure_code' => 'which treatment they are looking for',
+        'travel_date' => 'when they would like to travel',
+        'party_size' => 'how many people are travelling in total, including the patient',
+        'budget_sgd' => 'roughly what they want to keep the whole trip under, in Singapore dollars',
+        'hotel_nights' => 'how many nights they want to stay in Batam, where 0 means a day trip',
+    ];
+
+    /**
      * Extract slot values from one visitor message.
      *
      * @param  array<string,mixed>  $currentSlots  what is already known
+     * @param  string|null  $pendingSlot  the slot the assistant just asked about
      * @return array<string,mixed>
      */
-    public function extract(string $message, array $currentSlots = []): array
+    public function extract(string $message, array $currentSlots = [], ?string $pendingSlot = null): array
     {
         $started = microtime(true);
         $procedures = Procedure::orderBy('name')->get();
 
         if (! config('medbridge.hermes.enabled') || ! config('medbridge.hermes.api_key')) {
-            return $this->keywordFallback($message, $procedures, $started, 'no-credentials');
+            return $this->keywordFallback($message, $procedures, $started, 'no-credentials', $pendingSlot);
         }
 
         foreach ($this->modelChain() as $model) {
-            $response = $this->callModel($model, $message, $currentSlots, $procedures);
+            $response = $this->callModel($model, $message, $currentSlots, $procedures, $pendingSlot);
 
             if ($response !== null) {
                 $parsed = $this->parseResponse($response['content'], $procedures);
@@ -76,7 +93,7 @@ class HermesClient
             }
         }
 
-        return $this->keywordFallback($message, $procedures, $started, 'model-unavailable');
+        return $this->keywordFallback($message, $procedures, $started, 'model-unavailable', $pendingSlot);
     }
 
     /** @return list<string> */
@@ -94,7 +111,7 @@ class HermesClient
      *
      * @return array{content:string}|null
      */
-    private function callModel(string $model, string $message, array $slots, $procedures): ?array
+    private function callModel(string $model, string $message, array $slots, $procedures, ?string $pendingSlot = null): ?array
     {
         $baseUrl = rtrim(config('medbridge.hermes.base_url'), '/');
 
@@ -106,7 +123,7 @@ class HermesClient
             'response_format' => ['type' => 'json_object'],
             'messages' => [
                 ['role' => 'system', 'content' => $this->systemPrompt($procedures)],
-                ['role' => 'user', 'content' => $this->userPrompt($message, $slots)],
+                ['role' => 'user', 'content' => $this->userPrompt($message, $slots, $pendingSlot)],
             ],
         ];
 
@@ -190,6 +207,8 @@ class HermesClient
           "travel_date": string|null,      // ISO YYYY-MM-DD, resolved against today's date
           "party_size": integer|null,      // total people travelling, including the patient
           "budget_sgd": integer|null,      // total trip budget in SGD, ONLY if the visitor named one
+          "budget_declined": boolean,      // true ONLY if they said they do not want to set a budget
+          "hotel_nights": integer|null,    // nights staying in Batam; 0 is a real answer meaning a day trip
           "confidence": number,            // 0.0-1.0, how sure you are of procedure_code
           "urgency": "LOW"|"NORMAL"|"HIGH"|"URGENT",
           "symptom_keywords": string[],    // short clinical phrases the visitor used
@@ -201,21 +220,48 @@ class HermesClient
         - Never output a UUID, an id, or a price. budget_sgd is the visitor's own figure, never yours:
           do not estimate what a procedure costs, and do not fill it from anything except a number they stated.
         - Only fill a slot the visitor actually expressed. Do not guess a date or a party size.
+        - hotel_nights: 0 means a deliberate day trip and IS an answer. Use null when they did not
+          state a number of nights at all. The same distinction applies to budget: use budget_declined
+          for "I'd rather not", never budget_sgd 0.
+        - THE PENDING QUESTION, when the user message names one, is the strongest signal you have.
+          A bare or one-word reply ("2", "just me", "next friday", "no budget") is the answer to THAT
+          question: fill that slot and leave every other slot null. Do not read "2" as a party size
+          because the schema has one — read it as an answer to what was actually asked.
+        - When a question is pending and the message could be an answer to it, off_topic is false.
         - If the visitor describes acute symptoms or an emergency, set urgency "URGENT".
         - Output raw JSON only. No markdown, no code fences, no commentary.
         PROMPT;
     }
 
-    private function userPrompt(string $message, array $slots): string
+    private function userPrompt(string $message, array $slots, ?string $pendingSlot = null): string
     {
         $known = json_encode(array_filter([
             'procedure_code' => $slots['procedure_code'] ?? null,
             'travel_date' => $slots['travel_date'] ?? null,
             'party_size' => $slots['party_size'] ?? null,
             'budget_sgd' => $slots['budget_sgd'] ?? null,
+            'hotel_nights' => $slots['hotel_nights'] ?? null,
         ], fn ($v) => $v !== null), JSON_PRETTY_PRINT);
 
-        return "Already known (do not contradict unless the visitor corrects it):\n{$known}\n\nVisitor message:\n\"\"\"\n{$message}\n\"\"\"";
+        /*
+         * Without this the model reads "2" with no idea whether that is two
+         * travellers or two nights, and the schema is wide enough that it can
+         * confidently answer the wrong one. Naming the question turns a bare
+         * reply from a guess into an unambiguous extraction.
+         */
+        $pending = $pendingSlot !== null && isset(self::PENDING_SLOT_HINT[$pendingSlot])
+            ? sprintf(
+                'The assistant has just asked the visitor %s. Their message is almost certainly the '
+                .'answer to that question, so bind a bare or short reply to the "%s" slot and leave '
+                .'the others null.',
+                self::PENDING_SLOT_HINT[$pendingSlot],
+                $pendingSlot,
+            )
+            : 'No question is pending — the visitor is speaking freely, so fill whatever they express.';
+
+        return "Pending question:\n{$pending}\n\n"
+            ."Already known (do not contradict unless the visitor corrects it):\n{$known}\n\n"
+            ."Visitor message:\n\"\"\"\n{$message}\n\"\"\"";
     }
 
     /**
@@ -254,12 +300,24 @@ class HermesClient
             $confidence = min($confidence, 0.4);
         }
 
+        /*
+         * An explicit "I'd rather not" is a real answer, and that answer is
+         * zero. It rides on its own boolean rather than on budget_sgd 0 so a
+         * model that returns 0 for "they did not say" still cannot put words in
+         * the visitor's mouth — the decline has to be stated deliberately.
+         */
+        $budget = $this->normaliseBudget($data['budget_sgd'] ?? null);
+        if ($budget === null && ($data['budget_declined'] ?? false) === true) {
+            $budget = 0;
+        }
+
         return [
             'slots' => array_filter([
                 'procedure_code' => $code,
                 'travel_date' => $this->normaliseDate($data['travel_date'] ?? null),
                 'party_size' => $this->normalisePartySize($data['party_size'] ?? null),
-                'budget_sgd' => $this->normaliseBudget($data['budget_sgd'] ?? null),
+                'budget_sgd' => $budget,
+                'hotel_nights' => $this->normaliseHotelNights($data['hotel_nights'] ?? null),
             ], fn ($v) => $v !== null),
             'confidence' => max(0.0, min(1.0, $confidence)),
             'urgency' => in_array($data['urgency'] ?? null, ['LOW', 'NORMAL', 'HIGH', 'URGENT'], true)
@@ -395,6 +453,24 @@ class HermesClient
     }
 
     /**
+     * Nights in Batam.
+     *
+     * Zero is accepted here, unlike on budget, because a day trip is the answer
+     * a great many visitors give and there is no other way to express it. The
+     * "did they actually say this" guard is JSON null, which the prompt names
+     * explicitly.
+     */
+    private function normaliseHotelNights($value): ?int
+    {
+        if (! is_numeric($value)) {
+            return null;
+        }
+        $n = (int) $value;
+
+        return ($n >= 0 && $n <= 14) ? $n : null;
+    }
+
+    /**
      * Deterministic matcher used when Hermes is unreachable or unconfigured.
      *
      * This is not a second AI — it is a synonym lookup, and it reports low
@@ -403,7 +479,7 @@ class HermesClient
      *
      * @return array<string,mixed>
      */
-    private function keywordFallback(string $message, $procedures, float $started, string $reason): array
+    private function keywordFallback(string $message, $procedures, float $started, string $reason, ?string $pendingSlot = null): array
     {
         $lower = mb_strtolower($message);
         $matched = null;
@@ -418,11 +494,34 @@ class HermesClient
             }
         }
 
+        $slots = array_filter([
+            'procedure_code' => $matched?->code,
+            // Only when nothing was asked — with a question pending, the literal
+            // reading below owns the answer and a stray digit must not also land
+            // here as a party size.
+            'party_size' => $pendingSlot === null
+                ? $this->normalisePartySize($this->guessPartySize($lower))
+                : null,
+        ], fn ($v) => $v !== null);
+
+        /*
+         * With a question on screen, a short literal reply is unambiguous
+         * without a model at all. Reading it here is what stops a rate-limited
+         * free tier from trapping the visitor in the same question forever.
+         *
+         * This is not a second AI. It accepts only what it can read exactly,
+         * and anything it cannot leaves the slot null so the question is simply
+         * asked again.
+         */
+        if ($pendingSlot !== null) {
+            $literal = $this->literalAnswer($pendingSlot, $lower);
+            if ($literal !== null) {
+                $slots[$pendingSlot] = $literal;
+            }
+        }
+
         return [
-            'slots' => array_filter([
-                'procedure_code' => $matched?->code,
-                'party_size' => $this->normalisePartySize($this->guessPartySize($lower)),
-            ], fn ($v) => $v !== null),
+            'slots' => $slots,
             // Deliberately below the 0.75 default gate: a keyword hit is a hint,
             // not an extraction, and must never clear the bar on its own.
             'confidence' => $matched ? 0.55 : 0.0,
@@ -434,6 +533,39 @@ class HermesClient
             'raw' => null,
             'source' => $reason,
         ];
+    }
+
+    /**
+     * The visitor's reply read literally, against the one slot that was asked
+     * about. Returns null for anything it cannot read with certainty.
+     */
+    private function literalAnswer(string $slot, string $lower): int|string|null
+    {
+        $lower = trim($lower);
+        $bare = preg_match('/^\d{1,5}$/', $lower) ? (int) $lower : null;
+
+        return match ($slot) {
+            'party_size' => $this->normalisePartySize($this->guessPartySize($lower) ?? $bare),
+
+            'hotel_nights' => $this->normaliseHotelNights(match (true) {
+                (bool) preg_match('/\bday ?trip\b|\bno hotel\b|\bsame day\b/', $lower) => 0,
+                (bool) preg_match('/\b(\d{1,2})\s*nights?\b/', $lower, $m) => (int) $m[1],
+                default => $bare,
+            }),
+
+            'budget_sgd' => match (true) {
+                // "I'd rather not" is an answer, and the answer is zero.
+                (bool) preg_match('/\brather not\b|\bno budget\b|\bnot sure\b|\bno limit\b|\bskip\b/', $lower) => 0,
+                (bool) preg_match('/(\d[\d,]{2,6})/', str_replace(' ', '', $lower), $m)
+                    => $this->normaliseBudget((int) str_replace(',', '', $m[1])),
+                default => null,
+            },
+
+            // Left to the model on purpose: "2" is a plausible day-of-month and
+            // a plausible everything else, and a wrong travel date is worse than
+            // asking again. The date picker is already one tap away.
+            default => null,
+        };
     }
 
     private function guessPartySize(string $lower): ?int

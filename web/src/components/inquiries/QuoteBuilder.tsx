@@ -271,7 +271,15 @@ export function QuoteBuilder({ detail }: QuoteBuilderProps) {
                 Nothing is sent to the patient until a staff member approves this quote.
               </p>
             </div>
-            <div className="flex shrink-0 gap-2">
+            {/*
+              Both buttons take the same size. Approve was left on the default
+              size while Reject was `sm`, which is three mismatches at once —
+              40px against 32px, `rounded-lg` against `rounded-md`, `text-sm`
+              against `text-xs` — sitting directly beside each other. `sm`
+              matches "Open Patient Pass" in the approved state, so all three
+              states of this bar now line up.
+            */}
+            <div className="flex shrink-0 items-center gap-2">
               <Button
                 variant="outline"
                 size="sm"
@@ -282,13 +290,14 @@ export function QuoteBuilder({ detail }: QuoteBuilderProps) {
               </Button>
               <Button
                 variant="success"
+                size="sm"
                 onClick={() => approveQuote.mutate(operatorName)}
                 disabled={approveQuote.isPending}
               >
                 {approveQuote.isPending ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
+                  <Loader2 className="animate-spin" />
                 ) : (
-                  <CheckCircle2 className="h-4 w-4" />
+                  <CheckCircle2 />
                 )}
                 Approve Quote
               </Button>

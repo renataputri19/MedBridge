@@ -2,6 +2,8 @@
 
 namespace Tests\Feature;
 
+use App\Models\ChatSession;
+use App\Models\Procedure;
 use App\Services\HermesClient;
 use Database\Seeders\CatalogueSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -29,6 +31,16 @@ class HermesExtractionTest extends TestCase
     {
         parent::setUp();
         $this->seed(CatalogueSeeder::class);
+
+        /*
+         * Several tests here walk a whole conversation to reach the question
+         * they care about, which is five requests each — enough of this class
+         * back to back and the public 40/min limiter starts answering instead
+         * of the controller, so the suite fails somewhere unrelated to whatever
+         * was actually changed. The limiter is a real protection; it is
+         * disabled per test class, never globally.
+         */
+        $this->withoutMiddleware(\Illuminate\Routing\Middleware\ThrottleRequests::class);
 
         config([
             'medbridge.hermes.enabled' => true,
@@ -220,5 +232,154 @@ class HermesExtractionTest extends TestCase
 
             return str_ends_with($request->url(), '/chat/completions');
         });
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* Answering the question that is actually on screen                    */
+    /* ------------------------------------------------------------------ */
+
+    /**
+     * The bug this suite was extended for.
+     *
+     * A visitor asked "how many nights?" who typed "2" was asked again, and
+     * again, forever. `hotel_nights` was simply not in the extraction contract:
+     * the schema never mentioned it and parseResponse never returned it, so no
+     * sentence the visitor could type was capable of filling the slot, and
+     * `advance()` found it null every time.
+     *
+     * @test
+     */
+    public function a_typed_answer_fills_the_slot_the_assistant_just_asked_about(): void
+    {
+        Http::fake([self::ENDPOINT => Http::response($this->completion(
+            '{"procedure_code":null,"travel_date":null,"party_size":null,"budget_sgd":null,'
+            .'"budget_declined":false,"hotel_nights":2,"confidence":0.2,"urgency":"NORMAL",'
+            .'"symptom_keywords":[],"off_topic":false}'
+        ))]);
+
+        $token = $this->sessionAwaitingNights();
+
+        $this->postJson("/api/v1/chat/sessions/{$token}/messages", ['body' => '2'])
+            ->assertOk()
+            // Not the nights question a second time.
+            ->assertJsonPath('stage', 'RECOMMENDED');
+
+        $this->assertSame(2, ChatSession::where('token', $token)->first()->slot('hotel_nights'));
+    }
+
+    /**
+     * The model cannot read "2" correctly if it is never told what was asked,
+     * so the pending question travels with the message.
+     *
+     * @test
+     */
+    public function the_pending_question_is_sent_to_the_provider(): void
+    {
+        Http::fake([self::ENDPOINT => Http::response($this->completion(
+            '{"procedure_code":null,"hotel_nights":2,"confidence":0.1,"urgency":"NORMAL","symptom_keywords":[],"off_topic":false}'
+        ))]);
+
+        app(HermesClient::class)->extract('2', [], 'hotel_nights');
+
+        Http::assertSent(function (Request $request) {
+            $user = collect($request->data()['messages'])->firstWhere('role', 'user')['content'];
+
+            $this->assertStringContainsString('hotel_nights', $user);
+            $this->assertStringContainsString('nights they want to stay in Batam', $user);
+
+            return true;
+        });
+    }
+
+    /**
+     * Zero on the budget slot means "I'd rather not", which is a real answer —
+     * but it rides on its own boolean so that a model returning 0 for "they did
+     * not say" still cannot put words in the visitor's mouth.
+     *
+     * @test
+     */
+    public function an_explicit_decline_is_recorded_as_a_zero_budget(): void
+    {
+        Http::fake([self::ENDPOINT => Http::response($this->completion(
+            '{"procedure_code":null,"budget_sgd":null,"budget_declined":true,"confidence":0.1,'
+            .'"urgency":"NORMAL","symptom_keywords":[],"off_topic":false}'
+        ))]);
+
+        $result = app(HermesClient::class)->extract("I'd rather not set one", [], 'budget_sgd');
+
+        $this->assertSame(0, $result['slots']['budget_sgd']);
+    }
+
+    /** A budget of 0 with no decline is still silence, not an answer. @test */
+    public function a_bare_zero_budget_is_not_mistaken_for_a_decline(): void
+    {
+        Http::fake([self::ENDPOINT => Http::response($this->completion(
+            '{"procedure_code":null,"budget_sgd":0,"budget_declined":false,"confidence":0.1,'
+            .'"urgency":"NORMAL","symptom_keywords":[],"off_topic":false}'
+        ))]);
+
+        $result = app(HermesClient::class)->extract('hmm', [], 'budget_sgd');
+
+        $this->assertArrayNotHasKey('budget_sgd', $result['slots']);
+    }
+
+    /**
+     * A free tier that has run out must not trap the visitor in the same
+     * question. With a question pending, a short literal reply is unambiguous
+     * without a model at all.
+     *
+     * @test
+     */
+    public function a_short_answer_still_lands_when_the_model_is_unavailable(): void
+    {
+        config(['medbridge.hermes.enabled' => false]);
+
+        $client = app(HermesClient::class);
+
+        $this->assertSame(2, $client->extract('2', [], 'hotel_nights')['slots']['hotel_nights']);
+        $this->assertSame(0, $client->extract('day trip', [], 'hotel_nights')['slots']['hotel_nights']);
+        $this->assertSame(3, $client->extract('3 nights please', [], 'hotel_nights')['slots']['hotel_nights']);
+        $this->assertSame(0, $client->extract("I'd rather not", [], 'budget_sgd')['slots']['budget_sgd']);
+        $this->assertSame(2500, $client->extract('about 2,500', [], 'budget_sgd')['slots']['budget_sgd']);
+    }
+
+    /**
+     * The failure mode that would be worse than the loop: a bare number filed
+     * against whichever numeric slot the schema happens to offer first.
+     *
+     * @test
+     */
+    public function a_bare_number_never_lands_in_a_slot_that_was_not_asked_about(): void
+    {
+        config(['medbridge.hermes.enabled' => false]);
+
+        $result = app(HermesClient::class)->extract('2', ['party_size' => 1], 'hotel_nights');
+
+        $this->assertSame(2, $result['slots']['hotel_nights']);
+        $this->assertArrayNotHasKey('party_size', $result['slots']);
+    }
+
+    /** Walk a session to the point where nights is the outstanding question. */
+    private function sessionAwaitingNights(): string
+    {
+        $token = $this->postJson('/api/v1/chat/sessions')->assertCreated()->json('token');
+
+        $answers = [
+            ['procedure_code', Procedure::orderBy('name')->value('code')],
+            ['travel_date', now()->addWeeks(2)->toDateString()],
+            ['party_size', 1],
+            ['budget_sgd', 0],
+        ];
+
+        foreach ($answers as [$slot, $value]) {
+            $this->postJson("/api/v1/chat/sessions/{$token}/choice", [
+                'slot' => $slot,
+                'value' => $value,
+            ])->assertOk();
+        }
+
+        $this->assertNull(ChatSession::where('token', $token)->first()->slot('hotel_nights'));
+
+        return $token;
     }
 }

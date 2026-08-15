@@ -726,7 +726,7 @@ class BundleBuilder
             ->pluck('hospital_id')
             ->all();
 
-        $eligible = Hospital::orderByDesc('rating')->get()
+        $eligible = $this->rankHospitals(Hospital::all(), $procedure)
             ->filter(fn (Hospital $h) => ! in_array($h->id, $withdrawn, true))
             ->filter(fn (Hospital $h) => $specialty === null
                 || in_array($specialty, $h->specialties ?? [], true));
@@ -735,7 +735,31 @@ class BundleBuilder
         // going to a human anyway.
         return $eligible->isNotEmpty()
             ? $eligible->values()
-            : Hospital::orderByDesc('rating')->get();
+            : $this->rankHospitals(Hospital::all(), $procedure);
+    }
+
+    /**
+     * The order facilities are offered in, and so which one is the default.
+     *
+     * This used to be `orderByDesc('rating')`, against a rating the seeder had
+     * made up — an invented number deciding where we suggest someone has an
+     * operation. Price for THIS procedure is a fact we actually hold, it is
+     * already on screen next to every option, and it puts the patient on the
+     * cheapest qualifying facility rather than the one we flattered. Name
+     * breaks ties so the list is stable rather than dependent on row order.
+     *
+     * @param  Collection<int, Hospital>  $hospitals
+     * @return Collection<int, Hospital>
+     */
+    private function rankHospitals(Collection $hospitals, Procedure $procedure): Collection
+    {
+        return $hospitals
+            ->sortBy([
+                fn (Hospital $a, Hospital $b) => HospitalProcedure::priceFor($a->id, $procedure)
+                    <=> HospitalProcedure::priceFor($b->id, $procedure),
+                fn (Hospital $a, Hospital $b) => $a->name <=> $b->name,
+            ])
+            ->values();
     }
 
     /**
@@ -755,10 +779,10 @@ class BundleBuilder
                 $h->minutes_from_terminal,
                 str_replace(' Ferry Terminal', '', $h->nearest_terminal),
             ),
-            'rating' => (float) $h->rating,
             'unitPriceSgd' => HospitalProcedure::priceFor($h->id, $procedure),
-            // Our rating is one number from one source. The link lets them go
-            // and read what everyone else said — which is the honest thing to
+            // No rating travels with the option. We do not have one, and the
+            // one we used to send was invented. The link lets them go and read
+            // what everyone else actually said — which is the honest thing to
             // offer, and the only thing the Maps terms allow us to offer.
             'searchUrl' => $h->searchUrl(),
         ])->values()->all();
@@ -766,7 +790,7 @@ class BundleBuilder
 
     /**
      * Honour the patient's choice when they have made one; otherwise start them
-     * on the highest-rated facility that performs the procedure.
+     * on the lowest-priced facility that performs the procedure.
      */
     private function resolveHospital(Procedure $procedure, ?string $hospitalId): Hospital
     {
@@ -781,8 +805,9 @@ class BundleBuilder
 
         // Default to the lowest-priced eligible facility. We are not qualified
         // to make a clinical recommendation between hospitals, and starting a
-        // patient on the cheapest option is the neutral choice — the ratings
-        // and prices are all on screen for them to trade up.
+        // patient on the cheapest option is the neutral choice — the price,
+        // the accreditation and a link to real reviews are all on screen for
+        // them to trade up.
         return $eligible
             ->sortBy(fn (Hospital $h) => HospitalProcedure::priceFor($h->id, $procedure))
             ->first();
@@ -845,10 +870,10 @@ class BundleBuilder
     /**
      * The specialist for a procedure at a given hospital.
      *
-     * Ordered by specialty match first, then rating, then name — so the result
-     * is stable rather than dependent on row order, and a dental implant never
-     * lands on an internal-medicine physician just because they were listed
-     * first at that facility.
+     * Ordered by specialty match first, then years of experience, then name —
+     * so the result is stable rather than dependent on row order, and a dental
+     * implant never lands on an internal-medicine physician just because they
+     * were listed first at that facility.
      */
     private function pickDoctor(Procedure $procedure, Hospital $hospital): ?Doctor
     {
@@ -889,7 +914,9 @@ class BundleBuilder
             ->get()
             ->sortBy([
                 fn (Doctor $a, Doctor $b) => $this->specialtyScore($b, $keyword) <=> $this->specialtyScore($a, $keyword),
-                fn (Doctor $a, Doctor $b) => $b->rating <=> $a->rating,
+                // Experience, not an invented rating — see the note on the
+                // hospitals table.
+                fn (Doctor $a, Doctor $b) => $b->years_experience <=> $a->years_experience,
                 fn (Doctor $a, Doctor $b) => $a->full_name <=> $b->full_name,
             ])
             ->values();

@@ -33,13 +33,17 @@ import type {
 } from '@/types'
 
 /**
- * The plan, as a page of its own.
+ * The plan — the second half of one page, not a page of its own.
  *
- * The chat and the plan used to share a screen, side by side, which meant the
- * patient was reading a conversation and evaluating two dozen priced choices at
- * the same time. They are two different jobs. So the chat collects, and when
- * there is something to decide the page hands over to this: one centred column,
- * three steps, and only the choices belonging to the current step on screen.
+ * Two earlier shapes were both wrong, in opposite directions. Side by side, the
+ * patient read a conversation and evaluated two dozen priced choices at once.
+ * Split into two views, the swap read as landing on a different website, and
+ * every question meant leaving the plan to go and ask it.
+ *
+ * So there is one column that grows: the conversation collects, and the plan
+ * appears underneath it while the conversation folds up into a strip at the top.
+ * Nothing is replaced, so nothing has to be found again — and the three steps
+ * still keep only the choices belonging to one job on screen at a time.
  *
  * What has NOT changed is who chooses. Every category still lists its real
  * alternatives — hospital, specialist, both ferry legs, hotel, transfer — and
@@ -124,7 +128,18 @@ const TRIP_CATEGORIES: QuoteCategory[] = ['FERRY', 'HOTEL', 'TRANSPORT']
 interface PlanFlowProps {
   bundle: ChatBundle
   disabled?: boolean
-  onBackToChat: () => void
+  /**
+   * The assistant control, at the head of the step bar. Owned by the page
+   * because the conversation is: this reserves it a permanent place at the
+   * bottom edge, which is where the composer was a moment ago.
+   */
+  leading?: React.ReactNode
+  /**
+   * False while the conversation is raised over the plan, which occupies the
+   * bottom of the screen itself. Two things pinned to the same edge is one of
+   * them covering the other.
+   */
+  pinnedFooter?: boolean
   onToggle: (key: string, included: boolean) => void
   onSwap: (key: string, refId: string) => void
   onChooseHospital: (refId: string) => void
@@ -137,7 +152,8 @@ interface PlanFlowProps {
 export function PlanFlow({
   bundle,
   disabled,
-  onBackToChat,
+  leading,
+  pinnedFooter = true,
   onToggle,
   onSwap,
   onChooseHospital,
@@ -162,17 +178,12 @@ export function PlanFlow({
 
   return (
     <>
-      <div className="mx-auto w-full max-w-2xl px-4 pt-5">
-        <button
-          type="button"
-          onClick={onBackToChat}
-          className="flex items-center gap-1.5 text-xs font-medium text-slate-500 transition hover:text-brand-700"
-        >
-          <ArrowLeft className="h-3.5 w-3.5" />
-          Back to chat
-        </button>
-
-        <h1 className="mt-2.5 text-xl font-bold leading-tight tracking-tight text-slate-900">
+      {/*
+        No "back to chat" link: there is nothing to go back to. The conversation
+        is directly above this heading, folded up, and unfolds where it stands.
+      */}
+      <div className="mx-auto w-full max-w-2xl px-4 pt-4">
+        <h1 className="text-xl font-bold leading-tight tracking-tight text-slate-900">
           {bundle.procedure?.name ?? 'Your plan'}
         </h1>
 
@@ -234,37 +245,45 @@ export function PlanFlow({
         {step === 'review' && (
           <ReviewStep bundle={bundle} contactForm={contactForm} disclaimer={disclaimer} />
         )}
+
       </div>
 
-      {current.next ? (
-        <div className="sticky bottom-0 z-20 border-t border-slate-200 bg-white/95 backdrop-blur">
-          <div className="mx-auto flex w-full max-w-2xl items-center gap-2 px-4 py-3">
-            {previous && (
-              <Button variant="outline" onClick={() => go(previous.id)}>
-                <ArrowLeft className="h-4 w-4" />
-                <span className="hidden sm:inline">{previous.label}</span>
-              </Button>
-            )}
+      {/*
+        One bar on every step, including the last. The assistant is the first
+        thing in it and never moves, so the visitor always knows where the
+        conversation went — the review step used to drop the whole bar, which
+        took the way back to it with them.
+      */}
+      <div
+        className={cn(
+          'z-20 border-t border-slate-200 bg-white/95 backdrop-blur',
+          pinnedFooter && 'sticky bottom-0',
+        )}
+      >
+        <div className="mx-auto flex w-full max-w-2xl items-center gap-2 px-4 py-3">
+          {leading}
+
+          {previous && (
+            <Button variant="outline" onClick={() => go(previous.id)}>
+              <ArrowLeft className="h-4 w-4" />
+              <span className="hidden sm:inline">{previous.label}</span>
+            </Button>
+          )}
+
+          {current.next ? (
             <Button size="lg" className="flex-1" onClick={() => go(STEPS[index + 1].id)}>
               {current.next}
               <ArrowRight className="h-4 w-4" />
             </Button>
-          </div>
+          ) : (
+            /* Nothing to advance to: the only action left is the one inside the
+               form above, and duplicating it here would be a second send. */
+            <p className="flex-1 text-center text-[11px] leading-snug text-slate-500">
+              Fill in your details above to send this plan for review.
+            </p>
+          )}
         </div>
-      ) : (
-        previous && (
-          <div className="mx-auto flex w-full max-w-2xl justify-center px-4 pb-8">
-            <button
-              type="button"
-              onClick={() => go(previous.id)}
-              className="flex items-center gap-1.5 py-2 text-xs font-medium text-slate-500 transition hover:text-brand-700"
-            >
-              <ArrowLeft className="h-3.5 w-3.5" />
-              Back to your {previous.label.toLowerCase()}
-            </button>
-          </div>
-        )
-      )}
+      </div>
     </>
   )
 }
@@ -972,4 +991,3 @@ function OptionRow({
     </div>
   )
 }
-                                                                                                                                                                                                                                                                                                                         

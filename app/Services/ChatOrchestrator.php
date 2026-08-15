@@ -120,7 +120,7 @@ class ChatOrchestrator
             return $this->escalateEmergency($session, $text);
         }
 
-        $result = $this->hermes->extract($text, $session->slots ?? []);
+        $result = $this->hermes->extract($text, $session->slots ?? [], $this->pendingSlot($session));
 
         // Answered before anything is written down, so a question about football
         // never becomes the inquiry's source message or a symptom keyword.
@@ -191,15 +191,38 @@ class ChatOrchestrator
     /** Ask for the next missing slot, or present the bundle when all are in. */
     public function advance(ChatSession $session): ChatMessage
     {
-        foreach (self::REQUIRED_SLOTS as $slot) {
-            if ($session->slot($slot) === null) {
-                $question = $this->questionFor($session, $slot);
+        $slot = $this->pendingSlot($session);
 
-                return $this->say($session, $question['prompt'], $question);
-            }
+        if ($slot !== null) {
+            $question = $this->questionFor($session, $slot);
+
+            return $this->say($session, $question['prompt'], $question);
         }
 
         return $this->presentBundle($session);
+    }
+
+    /**
+     * The slot the visitor is currently being asked about, or null once the
+     * plan can be built.
+     *
+     * This is the same walk `advance()` does, which is exactly why it is the
+     * right answer: the first unfilled required slot IS the question on screen.
+     *
+     * It exists because extraction needs it. A visitor who types "2" at the
+     * nights question is not ambiguous to a human and must not be ambiguous to
+     * the model either — without this the reply has no anchor, and the schema
+     * is wide enough that a bare number can be filed against the wrong slot.
+     */
+    private function pendingSlot(ChatSession $session): ?string
+    {
+        foreach (self::REQUIRED_SLOTS as $slot) {
+            if ($session->slot($slot) === null) {
+                return $slot;
+            }
+        }
+
+        return null;
     }
 
     /** Build (or rebuild) the recommendation and show it. */

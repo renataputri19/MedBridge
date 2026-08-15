@@ -1006,4 +1006,6 @@ export type RealtimeEvent =
   | { type: 'activity'; payload: ActivityEvent }
   | { type: 'inquiry.updated'; payload: Inquiry }
   | { type: 'inquiry.created'; payload: Inquiry }
-  | { type: 'messag
+  | { type: 'message.received'; payload: Message }
+  | { type: 'kpis.updated'; payload: DashboardKpis }
+  | { type: 'demo.stage'; payload: { stage: string; progress: number; inquiryId: UUID } }

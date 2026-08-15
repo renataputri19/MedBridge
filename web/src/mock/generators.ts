@@ -1053,4 +1053,3 @@ export function buildItinerary(params: {
     issuedAt: quote.approvedAt ?? new Date().toISOString(),
   }
 }
-                                                                       

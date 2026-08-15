@@ -33,8 +33,8 @@ interface NavSection {
 /*
  * Four sections used to be five, and twelve rows used to be sixteen.
  *
- * Gone: AI Activity (the audit trail now sits inside the case it describes,
- * where it is actually read), Messages (patients talk through the chat at `/`,
+ * Gone: AI Activity (the audit trail is recorded and served, but no longer
+ * rendered anywhere), Messages (patients talk through the chat at `/`,
  * so a second staff inbox was a duplicate of the same conversation), Analytics
  * (charts of a handful of rows), and Patients (a second list of people already
  * reachable from their own case — now a tab on Inquiries).

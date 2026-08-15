@@ -16,7 +16,8 @@ import {
 import { useSubmitDoctorReview } from '@/hooks/queries'
 import { formatDateTime } from '@/lib/format'
 import { cn } from '@/lib/utils'
-import type { DoctorReviewDecision, InquiryDetail } from '@/types'
+import { CONFIDENCE_THRESHOLD } from '@/lib/constants'
+import type { DoctorReviewDecision, InquiryDetail, ReviewReason } from '@/types'
 
 const DECISIONS: { value: DoctorReviewDecision; label: string; hint: string }[] = [
   {
@@ -42,8 +43,84 @@ const DECISIONS: { value: DoctorReviewDecision; label: string; hint: string }[] 
  * The second half of the human-in-the-loop chain: a doctor, not the AI, decides
  * whether a patient is suitable for the cross-border pathway.
  */
+/** Lowercased, punctuation-free, single-spaced — for comparing labels by meaning. */
+function normalise(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+}
+
+/**
+ * Symptoms the patient actually described, as opposed to the procedure name.
+ *
+ * A visitor who picks "Cataract Surgery" from a list gets it echoed back as a
+ * symptom keyword, so the raw list frequently restates the procedure and
+ * nothing else. Containment rather than equality, because the keyword is the
+ * plain name while the label carries the catalogue qualifier ("Cataract
+ * Surgery (per eye, phaco + IOL)").
+ *
+ * These sat in the AI panel, which was a poor home: the person who needs to
+ * know what the patient reported feeling is the doctor deciding whether the
+ * cross-border pathway suits them.
+ */
+function reportedSymptoms(detail: InquiryDetail): string[] {
+  const extraction = detail.aiExtraction
+  if (!extraction) return []
+
+  const label = normalise(extraction.procedureLabel)
+
+  return extraction.symptomKeywords.filter((keyword) => {
+    const candidate = normalise(keyword)
+    return candidate !== '' && !label.includes(candidate) && !candidate.includes(label)
+  })
+}
+
+/**
+ * Why the gate is holding this case.
+ *
+ * The confidence score sits inside the LOW_CONFIDENCE line rather than in a
+ * meter of its own: a percentage is worth reading next to the threshold it
+ * failed, and says very little anywhere else.
+ */
+function reasonCopy(reason: ReviewReason, detail: InquiryDetail): string {
+  switch (reason) {
+    case 'LOW_CONFIDENCE': {
+      const pct = Math.round((detail.aiExtraction?.confidence ?? 0) * 100)
+      return `Extraction scored ${pct}%, under the ${Math.round(
+        CONFIDENCE_THRESHOLD * 100,
+      )}% auto-quote threshold.`
+    }
+    case 'UNKNOWN_PROCEDURE':
+      return 'The request did not map to a catalogue procedure.'
+    case 'EMERGENCY_LANGUAGE':
+      return 'Emergency or acute-symptom language was detected.'
+    case 'HIGH_RISK_PROCEDURE':
+      return `${detail.procedure?.name ?? 'This procedure'} always requires clinical sign-off.`
+    case 'PRICE_OUT_OF_BAND':
+      return 'Calculated price fell outside the approved band.'
+  }
+}
+
+/**
+ * The gate's reasons, or the procedure flag on its own when no extraction ran.
+ * An inquiry with no extraction still escalates on a high-risk procedure, and
+ * silence there would read as "nothing is holding this".
+ */
+function gateReasons(detail: InquiryDetail): ReviewReason[] {
+  const extraction = detail.aiExtraction
+
+  if (extraction?.requiresHumanReview && extraction.reviewReasons.length > 0) {
+    return extraction.reviewReasons
+  }
+
+  return detail.procedure?.requiresDoctorReview ? ['HIGH_RISK_PROCEDURE'] : []
+}
+
 export function DoctorReviewPanel({ detail }: { detail: InquiryDetail }) {
   const review = detail.doctorReview
+  const symptoms = reportedSymptoms(detail)
+  const reasons = gateReasons(detail)
   const submitted = Boolean(review?.reviewedAt) && review?.decision !== 'PENDING'
 
   const [decision, setDecision] = useState<DoctorReviewDecision>(
@@ -104,11 +181,39 @@ export function DoctorReviewPanel({ detail }: { detail: InquiryDetail }) {
       </CardHeader>
 
       <CardContent className="space-y-4 pt-5">
-        {detail.procedure?.requiresDoctorReview && (
-          <p className="rounded-lg border border-orange-200 bg-orange-50 px-3 py-2 text-xs text-orange-800">
-            <span className="font-semibold">{detail.procedure.name}</span> is flagged as
-            requiring clinical sign-off before any quote is released.
-          </p>
+        {/*
+          Why the case is held, in the panel where it gets released. This used
+          to be a whole card of its own above the quote — the only part of it
+          worth keeping was this list, and the person who needs it is whoever is
+          about to sign the case off, so it lives here instead of adding a
+          section to the page.
+        */}
+        {reasons.length > 0 && (
+          <div className="rounded-lg border border-orange-200 bg-orange-50 px-3 py-2 text-xs text-orange-800">
+            <p className="font-semibold">
+              Held for review before any quote reaches the patient.
+            </p>
+            <ul className="mt-1 space-y-0.5">
+              {reasons.map((reason) => (
+                <li key={reason}>• {reasonCopy(reason, detail)}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {symptoms.length > 0 && (
+          <div>
+            <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+              Symptoms the patient described
+            </p>
+            <div className="flex flex-wrap gap-1.5">
+              {symptoms.map((symptom) => (
+                <Badge key={symptom} variant="neutral" size="sm">
+                  {symptom}
+                </Badge>
+              ))}
+            </div>
+          </div>
         )}
 
         {review && review.requiredPreOpTests.length > 0 && (

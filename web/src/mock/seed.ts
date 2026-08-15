@@ -991,4 +991,3 @@ export const transportMap = byId(groundTransport)
 
 /** Operations staff names used by the mock activity feed. Invented, like the patients. */
 export const STAFF_NAMES = ['Nadia Putri', 'Rizky Pratama', 'Clara Tanuwijaya', 'Fajar Ramadhan']
-                                                                                                                                                                                                                                                                                                                   
