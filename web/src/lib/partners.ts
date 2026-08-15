@@ -59,8 +59,8 @@ export const PARTNER_META: Record<
   },
   hotel: {
     path: 'hotel',
-    singular: 'Recovery hotel',
-    plural: 'Recovery hotels',
+    singular: 'Hotel',
+    plural: 'Hotels',
     supplies: 'recovery nights',
     blurb: 'Room nights booked through MedBridge, your nightly rate and recovery certification.',
     accent: 'bg-violet-50 text-violet-700 ring-violet-200',
@@ -68,7 +68,7 @@ export const PARTNER_META: Record<
   ferry: {
     path: 'ferry',
     singular: 'Ferry crossing',
-    plural: 'Ferry operators',
+    plural: 'Ferries',
     supplies: 'crossings',
     blurb: 'Seats booked on your crossings, with the schedule and fare we quote against.',
     accent: 'bg-indigo-50 text-indigo-700 ring-indigo-200',

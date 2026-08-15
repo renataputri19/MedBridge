@@ -60,8 +60,8 @@ const NAV_SECTIONS: NavSection[] = [
     label: 'Partner portals',
     items: [
       { to: '/hospital', label: 'Hospitals', icon: Building2 },
-      { to: '/hotel', label: 'Recovery Hotels', icon: BedDouble },
-      { to: '/ferry', label: 'Ferry Operators', icon: Ship },
+      { to: '/hotel', label: 'Hotels', icon: BedDouble },
+      { to: '/ferry', label: 'Ferry', icon: Ship },
       { to: '/transport', label: 'Ground Transport', icon: Car },
     ],
   },
