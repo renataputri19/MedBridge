@@ -635,6 +635,32 @@ export interface PartnerPortal extends PartnerSummary {
 }
 
 /**
+ * One case waiting on this hospital's clinical sign-off.
+ *
+ * Carries no inquiry UUID and no contact details — the same rule the bookings
+ * list follows. `reference` is both the label a coordinator quotes on the phone
+ * and the address the decision is posted to, which is why there is no id here
+ * to miss.
+ */
+export interface PartnerReviewRow {
+  reference: string
+  patientFirstName: string
+  procedureName: string
+  doctorName: string | null
+  doctorId: UUID | null
+  reviewReasons: ReviewReason[]
+  symptomKeywords: string[]
+  requestedAt: ISODateTime | null
+  decision: DoctorReviewDecision
+}
+
+export interface PartnerReviewQueue {
+  hospitalId: UUID
+  hospitalName: string
+  pending: PartnerReviewRow[]
+}
+
+/**
  * The marketplace's own numbers.
  *
  * EVERY FIGURE IS AN ENTITLEMENT, NOT CASH. There is no payments table in this

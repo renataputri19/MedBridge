@@ -480,4 +480,197 @@ class PartnerPortalTest extends TestCase
         $this->assertLessThanOrEqual($summary['approvedQuotes'], $summary['committedQuotes']);
         $this->assertLessThanOrEqual($summary['patients'], $summary['committedPatients']);
     }
+
+    /* ------------------------------------------------------------------ */
+    /* Clinical sign-off                                                   */
+    /* ------------------------------------------------------------------ */
+
+    /**
+     * A case awaiting clinical sign-off, at a named hospital.
+     *
+     * @return array{0: \App\Models\Hospital, 1: Inquiry}
+     */
+    private function caseAwaitingSignOff(string $hospitalId = 'e91437ac-05d6-4b28-a9f1-73c26b8e5904'): array
+    {
+        $hospital = \App\Models\Hospital::whereKey($hospitalId)->firstOrFail();
+        $procedure = Procedure::where('code', 'OPH-CAT-01')->firstOrFail();
+
+        $patient = \App\Models\Patient::create([
+            'full_name' => 'Aisyah Kamil',
+            'phone_e164' => '+6591230000',
+            'consent_given' => true,
+        ]);
+
+        $inquiry = Inquiry::create([
+            'reference' => 'MBP-2026-9500',
+            'patient_id' => $patient->id,
+            'hospital_id' => $hospital->id,
+            'procedure_id' => $procedure->id,
+            'status' => 'DOCTOR_REVIEW_REQUIRED',
+            'source_message' => 'Cataract surgery please.',
+            'sla_due_at' => now()->addHours(2),
+        ]);
+
+        Quote::create([
+            'inquiry_id' => $inquiry->id,
+            'status' => 'DRAFT',
+            'sg_benchmark_sgd' => 7180,
+            'idr_per_sgd' => 12150,
+            'valid_until' => now()->addDays(14),
+        ])->lineItems()->create([
+            'category' => 'TREATMENT',
+            'label' => 'Cataract Surgery',
+            'quantity' => 1,
+            'unit_price_sgd' => 1850,
+            'sort_order' => 0,
+        ]);
+
+        return [$hospital, $inquiry];
+    }
+
+    public function test_a_hospital_sees_only_its_own_cases_awaiting_sign_off(): void
+    {
+        [$hospital] = $this->caseAwaitingSignOff();
+        $other = \App\Models\Hospital::whereKeyNot($hospital->id)->firstOrFail();
+
+        $mine = $this->getJson("/api/v1/partners/hospital/{$hospital->id}/reviews")
+            ->assertOk()->json('pending');
+        $theirs = $this->getJson("/api/v1/partners/hospital/{$other->id}/reviews")
+            ->assertOk()->json('pending');
+
+        $this->assertCount(1, $mine);
+        $this->assertSame('MBP-2026-9500', $mine[0]['reference']);
+        $this->assertEmpty($theirs, "Another hospital can see this facility's caseload.");
+    }
+
+    public function test_the_review_queue_carries_no_uuid_and_no_contact_details(): void
+    {
+        [$hospital, $inquiry] = $this->caseAwaitingSignOff();
+
+        $row = $this->getJson("/api/v1/partners/hospital/{$hospital->id}/reviews")
+            ->assertOk()->json('pending.0');
+
+        // First name only, and never our primary key.
+        $this->assertSame('Aisyah', $row['patientFirstName']);
+        $this->assertArrayNotHasKey('id', $row);
+        $this->assertArrayNotHasKey('inquiryId', $row);
+        $this->assertArrayNotHasKey('patientId', $row);
+
+        $encoded = json_encode($row);
+        $this->assertStringNotContainsString($inquiry->id, $encoded);
+        $this->assertStringNotContainsString('+6591230000', $encoded);
+        $this->assertStringNotContainsString('Kamil', $encoded);
+    }
+
+    public function test_a_hospital_cannot_sign_off_another_hospitals_case(): void
+    {
+        [$hospital, $inquiry] = $this->caseAwaitingSignOff();
+        $other = \App\Models\Hospital::whereKeyNot($hospital->id)->firstOrFail();
+
+        $this->postJson("/api/v1/partners/hospital/{$other->id}/reviews/{$inquiry->reference}", [
+            'decision' => 'CLEARED',
+            'clinicalNotes' => 'Looks fine to me.',
+        ])->assertNotFound();
+
+        $this->assertSame('DOCTOR_REVIEW_REQUIRED', $inquiry->fresh()->status);
+    }
+
+    public function test_a_hospital_cannot_name_another_hospitals_doctor(): void
+    {
+        [$hospital, $inquiry] = $this->caseAwaitingSignOff();
+        $foreign = Doctor::where('hospital_id', '!=', $hospital->id)->firstOrFail();
+
+        $this->postJson("/api/v1/partners/hospital/{$hospital->id}/reviews/{$inquiry->reference}", [
+            'decision' => 'CLEARED',
+            'clinicalNotes' => 'Suitable for day surgery.',
+            'doctorId' => $foreign->id,
+        ])->assertStatus(422);
+    }
+
+    /**
+     * The whole point of the move: sign-off unblocks approval, and nothing else.
+     */
+    public function test_clearing_a_case_unblocks_approval_without_performing_it(): void
+    {
+        [$hospital, $inquiry] = $this->caseAwaitingSignOff();
+        $quote = $inquiry->quote()->firstOrFail();
+
+        // Blocked before the hospital has looked at it.
+        $this->postJson("/api/v1/inquiries/{$inquiry->id}/quote/approve", ['approvedByName' => 'Nadia Putri'])
+            ->assertStatus(409);
+
+        $this->postJson("/api/v1/partners/hospital/{$hospital->id}/reviews/{$inquiry->reference}", [
+            'decision' => 'CLEARED',
+            'clinicalNotes' => 'Fit for day surgery. No contraindications.',
+        ])->assertOk()->assertJsonPath('status', 'HOSPITAL_REVIEW_REQUIRED');
+
+        // Cleared clinically — but still no patient link until operations act.
+        $this->assertSame('HOSPITAL_REVIEW_REQUIRED', $inquiry->fresh()->status);
+        $this->assertSame('DRAFT', $quote->fresh()->status);
+        $this->assertNull($inquiry->fresh()->itinerary_token);
+
+        $this->postJson("/api/v1/inquiries/{$inquiry->id}/quote/approve", ['approvedByName' => 'Nadia Putri'])
+            ->assertOk();
+
+        $this->assertSame('APPROVED', $quote->fresh()->status);
+    }
+
+    public function test_a_declined_case_escalates_and_stays_unapprovable(): void
+    {
+        [$hospital, $inquiry] = $this->caseAwaitingSignOff();
+
+        $this->postJson("/api/v1/partners/hospital/{$hospital->id}/reviews/{$inquiry->reference}", [
+            'decision' => 'DECLINED',
+            'clinicalNotes' => 'Uncontrolled hypertension — not suitable for travel.',
+        ])->assertOk();
+
+        $this->assertSame('HUMAN_TAKEOVER', $inquiry->fresh()->status);
+        $this->assertNull($inquiry->fresh()->itinerary_token);
+    }
+
+    public function test_a_consult_request_holds_the_case_where_it_is(): void
+    {
+        [$hospital, $inquiry] = $this->caseAwaitingSignOff();
+
+        $this->postJson("/api/v1/partners/hospital/{$hospital->id}/reviews/{$inquiry->reference}", [
+            'decision' => 'NEEDS_CONSULT',
+            'clinicalNotes' => 'Request recent HbA1c before scheduling.',
+            'requiredPreOpTests' => ['HbA1c', 'ECG'],
+        ])->assertOk();
+
+        // Still the hospital's to decide, and still not quotable.
+        $this->assertSame('DOCTOR_REVIEW_REQUIRED', $inquiry->fresh()->status);
+        $this->postJson("/api/v1/inquiries/{$inquiry->id}/quote/approve", ['approvedByName' => 'Nadia Putri'])
+            ->assertStatus(409);
+    }
+
+    /**
+     * Operations no longer has a route to clear a case on the hospital's behalf.
+     *
+     * Leaving the old unscoped endpoint in place would have made the move
+     * cosmetic: the ops UI would be gone while any caller could still sign off
+     * any case at any facility.
+     */
+    public function test_operations_can_no_longer_clear_a_case_itself(): void
+    {
+        [, $inquiry] = $this->caseAwaitingSignOff();
+
+        $this->postJson("/api/v1/inquiries/{$inquiry->id}/doctor-review", [
+            'decision' => 'CLEARED',
+            'clinicalNotes' => 'Cleared by operations.',
+        ])->assertNotFound();
+
+        $this->assertSame('DOCTOR_REVIEW_REQUIRED', $inquiry->fresh()->status);
+    }
+
+    public function test_a_clinical_decision_requires_notes(): void
+    {
+        [$hospital, $inquiry] = $this->caseAwaitingSignOff();
+
+        $this->postJson("/api/v1/partners/hospital/{$hospital->id}/reviews/{$inquiry->reference}", [
+            'decision' => 'CLEARED',
+        ])->assertStatus(422);
+
+        $this->assertSame('DOCTOR_REVIEW_REQUIRED', $inquiry->fresh()->status);
+    }
 }

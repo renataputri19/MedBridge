@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
 import {
   AlertTriangle,
+  ArrowRight,
   BadgeCheck,
   CalendarDays,
   Check,
@@ -42,25 +43,18 @@ const STORAGE_KEY = 'medbridge.chat-token.v1'
 /**
  * The MedBridge front door.
  *
- * An application, not a website with a chat box on it. There is no landing
- * page in front of the assistant, because there is nothing for one to do: the
- * first question is already on screen. The conversation *is* the first screen —
- * header, transcript, composer, one viewport, nothing above it to scroll past.
+ * A conversation, and — once there is something to decide — the plan beside it.
+ * Never behind it: the plan used to be a page of its own that the chat handed
+ * over to, which meant every question cost the patient the thing they were
+ * asking about, and arriving at it read like landing on a second website.
  *
- * When there is something to price, the plan takes the screen and the assistant
- * drops to a control in the step bar, raising the same transcript and the same
- * composer over the plan when it is wanted. Three earlier shapes were all a
- * version of the same mistake:
- *
- *   - side by side, which asked the visitor to read a conversation and evaluate
- *     two dozen priced choices at once;
- *   - two views that swapped, where every question cost them the plan;
- *   - a gradient hero with a chat card floating on it, which made the assistant
- *     look bolted onto a brochure and the plan, later, like a third site.
- *
- * What holds it together is that the assistant never changes edge. It is at the
- * bottom of the screen before the plan exists and after it, so there is only
- * ever one place to go to say something.
+ * The reason it was ever a separate page is real, though, and this layout still
+ * has to answer it: a plan laid out in full, next to a conversation, asks
+ * someone to read a discussion and evaluate two dozen priced choices at once.
+ * The answer is inside the column rather than outside it — `PlanFlow` shows one
+ * step at a time, and each choice in that step is a single collapsed row until
+ * the patient opens it. So both surfaces are always on screen, and only one
+ * decision is ever asking for attention.
  *
  * Two things worth knowing when reading this file:
  *
@@ -96,18 +90,12 @@ export default function Chat() {
   const [pending, setPending] = useState<string | null>(null)
   const [draft, setDraft] = useState('')
   const [unpinned, setUnpinned] = useState(false)
-  /*
-   * Whether the visitor has raised the conversation over the plan. Before there
-   * is a plan this means nothing — the conversation is the screen — which is
-   * why the render reads `chatExpanded` and not this flag directly.
-   */
-  const [chatOpen, setChatOpen] = useState(false)
 
   /*
    * Scrolling is scoped to the transcript, never the page. `scrollIntoView`
    * walks every scrollable ancestor, so anchoring the last turn also dragged
-   * the window, and the visitor had to scroll the page back after every send.
-   * `scrollTop` on this element moves this element only.
+   * the window — the header and hero moved on each send and the visitor had to
+   * scroll the page back. `scrollTop` on this element moves this element only.
    */
   const listRef = useRef<HTMLDivElement>(null)
   const contentRef = useRef<HTMLDivElement>(null)
@@ -118,19 +106,16 @@ export default function Chat() {
   const refocusRef = useRef(false)
   const handedOffRef = useRef(false)
 
-  /* ---- What the page is showing ---- */
+  /* ---- What is on screen ---- */
 
   const stage = session?.stage
   const hasPlan = Boolean(session?.bundle)
   /*
-   * A submitted request has nothing left to edit, so the plan comes off the
-   * page and the confirmation lands at the end of the conversation it came out
-   * of — which by then is the whole page again.
+   * A submitted request has nothing left to edit, so the column comes off and
+   * the conversation has the page back — which is where the confirmation
+   * belongs, at the end of the conversation that produced it.
    */
   const planVisible = hasPlan && stage !== 'SUBMITTED'
-  // Before there is a plan the conversation IS the page; after, it is unfolded
-  // only when the visitor asks for it.
-  const chatExpanded = !planVisible || chatOpen
 
   /* ---- Session bootstrap: resume on refresh, otherwise start fresh ---- */
   useEffect(() => {
@@ -210,17 +195,8 @@ export default function Chat() {
     // like scrolling away — which would flash the jump button on every turn.
     if (!list || animatingRef.current) return
 
-    /*
-     * A list with nothing to scroll is always at its latest turn.
-     *
-     * Without this, one scroll event fired before layout had settled — when the
-     * container still measured zero high — read as "scrolled a long way up" and
-     * stranded the jump button over a greeting. Nothing could clear it either:
-     * a list that cannot scroll never fires another scroll event.
-     */
-    const overflowing = list.scrollHeight - list.clientHeight > PINNED_SLACK_PX
     const distance = list.scrollHeight - list.scrollTop - list.clientHeight
-    const pinned = !overflowing || distance <= PINNED_SLACK_PX
+    const pinned = distance <= PINNED_SLACK_PX
 
     pinnedRef.current = pinned
     setUnpinned(!pinned)
@@ -230,10 +206,6 @@ export default function Chat() {
    * A turn is not one layout pass: the bubble arrives, then its option chips
    * mount and wrap. Watching the content box catches the whole settle, which a
    * single effect on `messages.length` does not.
-   *
-   * Re-runs when the conversation folds, because folding unmounts the
-   * transcript: an observer left watching the discarded node silently stops
-   * following the conversation the next time it is opened.
    */
   useEffect(() => {
     const list = listRef.current
@@ -241,19 +213,13 @@ export default function Chat() {
     if (!list || !content) return
 
     const observer = new ResizeObserver(() => {
-      // A conversation that has grown short again — a fresh start, a resize —
-      // has nowhere to jump to, so the button goes with it.
-      if (list.scrollHeight - list.clientHeight <= PINNED_SLACK_PX) {
-        pinnedRef.current = true
-        setUnpinned(false)
-      }
       if (!pinnedRef.current || animatingRef.current) return
       list.scrollTop = list.scrollHeight
     })
 
     observer.observe(content)
     return () => observer.disconnect()
-  }, [chatExpanded])
+  }, [])
 
   const lastMessage = session?.messages[session.messages.length - 1]
 
@@ -265,19 +231,11 @@ export default function Chat() {
     scrollToLatest(firstPaintRef.current ? 'auto' : 'smooth')
     firstPaintRef.current = false
     // The echo and the typing bubble are turns too — both change the height of
-    // the transcript, and both should leave it sitting at the bottom.
-    // `chatExpanded` is in here because folding unmounts the transcript:
-    // unfolding it remounts at scroll zero, which opens the conversation on the
-    // greeting instead of on the turn they left off at.
+    // the transcript, and both should leave it sitting at the bottom. `hasPlan`
+    // is in here because the card is re-measured when the plan appears beside
+    // it: on a phone it shortens to make room, which moves the bottom.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    lastMessage?.id,
-    lastMessage?.ui?.kind,
-    session?.messages.length,
-    pending,
-    thinking,
-    chatExpanded,
-  ])
+  }, [lastMessage?.id, lastMessage?.ui?.kind, session?.messages.length, pending, thinking, hasPlan])
 
   // Typing, then a send, then a disabled input: focus has to be handed back or
   // the next message needs a click first.
@@ -287,16 +245,13 @@ export default function Chat() {
     inputRef.current?.focus()
   }, [busy])
 
-  /* ---- Moving between the conversation and the plan ---- */
-
   /*
    * The first plan, once.
    *
-   * The conversation gives the screen over to it, so the page starts at the top
-   * — the second shell has a document scroll where the first had none, and
-   * inheriting a stale offset would open the plan halfway down itself. Once
-   * only: doing this on every reprice would drag the page out from under
-   * someone who is reading.
+   * The layout changes shape around it — the hero goes, the column arrives —
+   * so the page returns to the top rather than leaving the visitor at an offset
+   * that now means something else. Once only: doing this on every reprice would
+   * yank the page from under someone who is reading.
    */
   useEffect(() => {
     if (!hasPlan) {
@@ -306,23 +261,8 @@ export default function Chat() {
     if (handedOffRef.current) return
 
     handedOffRef.current = true
-    setChatOpen(false)
     window.scrollTo({ top: 0 })
   }, [hasPlan])
-
-  /*
-   * Raising arms the "open at the bottom" path, so the conversation appears at
-   * the turn they left off at rather than animating up through the whole thing
-   * from the greeting.
-   */
-  const openChat = () => {
-    firstPaintRef.current = true
-    setChatOpen(true)
-  }
-
-  // Lowering leaves the plan exactly where it was. Nothing behind the dock
-  // moved while it was up, so there is nothing to restore.
-  const closeChat = () => setChatOpen(false)
 
   /* ---- Actions ---- */
 
@@ -413,310 +353,172 @@ export default function Chat() {
     .reverse()
     .find((message) => message.ui?.kind === 'submitted')?.ui
 
-  /* ---- The two pieces, built once and placed twice ---- */
+  /* ---- The conversation ---- */
 
-  /**
-   * The conversation itself. No card, no border, no shadow: it is the page it
-   * is on, not a widget embedded in one.
+  /*
+   * One card, in two places. Centred under the hero while it is the only thing
+   * on the page; the left column of the pair once the plan arrives, where it
+   * shortens on a phone to leave the plan visible underneath and pins to the
+   * viewport on a desktop so the composer is always within reach.
+   *
+   * Being able to ask without going anywhere is the whole point of the pair. A
+   * composer you have to scroll back up to find is a page swap with extra steps.
    */
-  const transcript = (
-    <div className="relative min-h-0 flex-1">
-      <div
-        ref={listRef}
-        onScroll={handleListScroll}
-        className="scrollbar-thin h-full overflow-y-auto overscroll-contain"
-      >
-        <div ref={contentRef} className="mx-auto w-full max-w-2xl space-y-5 px-4 py-5">
-          {/* What the page is, said once, at the top of the conversation and
-              scrolling away with it. It used to be a gradient banner the chat
-              box sat on top of, which made the assistant look like a widget
-              bolted onto a brochure — and the plan, later, like a third site. */}
-          {!hasPlan && <Opening />}
-
-          {loading ? (
-            <div className="space-y-3">
-              <Skeleton className="h-16 w-3/4 rounded-2xl" />
-              <Skeleton className="h-24 w-full rounded-2xl" />
-            </div>
-          ) : !session ? (
-            <div className="py-8 text-center">
-              <p className="text-sm font-medium text-slate-800">The assistant is unavailable.</p>
-              <p className="mt-1 text-sm text-slate-500">
-                Please call us on {SUPPORT_PHONE} and we'll help you directly.
-              </p>
-              <Button className="mt-4" onClick={handleRestart}>
-                <RefreshCw className="h-4 w-4" />
-                Try again
-              </Button>
-            </div>
-          ) : (
-            session.messages.map((message) => (
-              <Turn
-                key={message.id}
-                message={message}
-                busy={busy}
-                onChoice={(slot, value, label) => {
-                  void run(() => chatApi.choose(session.token, slot, value), label)
-                }}
-                onSend={(text) => {
-                  void run(() => chatApi.send(session.token, text), text)
-                }}
-              />
-            ))
-          )}
-
-          {/* Their turn, before the server has one. Same bubble as the real
-              thing — only dimmed, so the wait reads as "sending" rather than as
-              a different kind of message. */}
-          {pending !== null && session && (
-            <div className="flex animate-in justify-end fade-in slide-in-from-bottom-1">
-              <div className="max-w-[85%] rounded-2xl rounded-br-md bg-brand-600 px-3.5 py-2 text-sm text-white opacity-70 shadow-sm">
-                {pending}
-              </div>
-            </div>
-          )}
-
-          {/* The assistant is composing — shown in the flow so the list still
-              ends at the bottom while we wait. */}
-          {thinking && session && <TypingBubble />}
-
-          {/* The confirmation is the last turn of the conversation that
-              produced it, not a card on a screen it arrives at. */}
-          {submitted?.kind === 'submitted' && (
-            <div className="space-y-3 pt-1">
-              <SubmittedCard ui={submitted} />
-              <Disclaimer />
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* Only while the visitor has scrolled away — otherwise the list follows
-          on its own and a button would be noise. */}
-      {unpinned && session && (
-        <button
-          type="button"
-          onClick={() => scrollToLatest('smooth')}
-          className="absolute bottom-3 left-1/2 flex -translate-x-1/2 items-center gap-1 rounded-full border border-slate-200 bg-white/95 px-3 py-1.5 text-[11px] font-semibold text-slate-600 shadow-md backdrop-blur transition hover:bg-slate-50"
-        >
-          <ChevronDown className="h-3.5 w-3.5" />
-          Latest message
-        </button>
+  const conversation = (
+    <div
+      className={cn(
+        'flex flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-lg shadow-slate-900/5',
+        planVisible
+          ? 'h-[min(46vh,22rem)] min-h-[280px] lg:h-[calc(100dvh-6.5rem)] lg:max-h-[46rem]'
+          : 'h-[min(60vh,calc(100vh-24rem))] min-h-[400px]',
       )}
-    </div>
-  )
-
-  /**
-   * The composer, at the bottom of the viewport in both shells. It is the one
-   * thing that never moves — which is most of what makes this read as one
-   * screen the visitor is still on rather than a series of them.
-   */
-  const composer = (
-    <div className="shrink-0 border-t border-slate-200 bg-white">
-      <div className="mx-auto w-full max-w-2xl px-4 py-3">
-        <div className="flex items-center gap-2">
-          <Input
-            ref={inputRef}
-            value={draft}
-            onChange={(event) => setDraft(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter' && !event.shiftKey) {
-                event.preventDefault()
-                void handleSend()
-              }
-            }}
-            placeholder={canType ? 'Type your message…' : 'Your request has been submitted'}
-            disabled={busy || !canType}
-            aria-label="Message"
-          />
-          <Button
-            size="icon"
-            onClick={handleSend}
-            disabled={busy || !canType || !draft.trim()}
-            aria-label="Send"
-          >
-            <Send className="h-4 w-4" />
-          </Button>
-        </div>
-
-        {/* The one promise worth standing under the box you type into. */}
-        {!hasPlan && (
-          <p className="mt-2 flex items-center justify-center gap-1.5 text-center text-[11px] text-slate-400">
-            <ShieldCheck className="h-3.5 w-3.5 shrink-0 text-teal-600" />
-            Nothing is booked from this chat — a coordinator reviews every request.
-          </p>
-        )}
-      </div>
-    </div>
-  )
-
-  /*
-   * ---- Shell one: the conversation is the application ----
-   *
-   * Header, conversation, composer, one viewport, nothing above it to scroll
-   * past. There is no landing page in front of this because there is nothing
-   * for one to do: the first question is already on screen.
-   */
-  if (!planVisible || !session || !bundle) {
-    return (
-      <div className="flex h-dvh flex-col bg-white">
-        <SiteHeader onRestart={handleRestart} showRestart={Boolean(session)} />
-        {transcript}
-        {composer}
-      </div>
-    )
-  }
-
-  /*
-   * ---- Shell two: the plan is the application ----
-   *
-   * The same header, and the assistant still at the bottom — as a control in
-   * the step bar rather than an open composer, raising the conversation over
-   * the plan when it is wanted. The plan is never navigated away from, so a
-   * question costs nothing and there is nothing to find again afterwards.
-   */
-  return (
-    <div className="min-h-dvh bg-slate-50">
-      <SiteHeader onRestart={handleRestart} showRestart={Boolean(session)} />
-
-      {/* Fades up on arrival rather than cutting: the conversation just handed
-          the screen over, and an instant swap is what made this read as a
-          different site. Plays once — the wrapper stays mounted through every
-          reprice. Padded out from under the dock while it is raised. */}
-      <div
-        className={cn(
-          'animate-in fade-in slide-in-from-bottom-4 duration-500',
-          chatOpen && 'pb-[60vh]',
-        )}
-      >
-        <PlanFlow
-          bundle={bundle}
-          disabled={!planEditable}
-          leading={<AssistantButton open={chatOpen} onToggle={chatOpen ? closeChat : openChat} />}
-          pinnedFooter={!chatOpen}
-          onToggle={(key, included) =>
-            patchBundle(() => chatApi.toggleLine(session.token, key, included))
-          }
-          onSwap={(key, refId) => patchBundle(() => chatApi.swapLine(session.token, key, refId))}
-          onChooseHospital={(refId) =>
-            patchBundle(() => chatApi.chooseHospital(session.token, refId))
-          }
-          onSetNights={(nights) => patchBundle(() => chatApi.setNights(session.token, nights))}
-          contactForm={
-            <ContactForm
-              submitting={busy}
-              totalSgd={bundle.totals.totalSgd}
-              onSubmit={async (submission) => {
-                setBusy(true)
-                try {
-                  setSession(await chatApi.submit(session.token, submission))
-                } catch (error) {
-                  toast.error('We could not submit your request', {
-                    description: describe(error, 'Please try again in a moment.'),
-                  })
-                } finally {
-                  setBusy(false)
-                }
-              }}
-            />
-          }
-          disclaimer={<Disclaimer />}
-        />
-      </div>
-
-      {/*
-        Raised, not navigated to. No scrim: the plan stays lit and legible
-        behind it, because half the questions asked here are about the row the
-        visitor is looking at while they type.
-      */}
-      {chatOpen && (
-        <div
-          className="fixed inset-x-0 bottom-0 z-40 flex h-[min(60vh,32rem)] animate-in flex-col rounded-t-2xl border-t border-slate-200 bg-white shadow-[0_-8px_30px_rgba(15,23,42,0.14)] slide-in-from-bottom"
-          role="dialog"
-          aria-label="Care assistant"
-        >
-          <header className="flex shrink-0 items-center gap-2.5 border-b border-slate-200 px-4 py-2.5">
-            <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-teal-100 text-teal-700">
-              <Sparkles className="h-3.5 w-3.5" />
+    >
+          <header className="flex items-center gap-2.5 border-b border-slate-200 px-4 py-3">
+            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-teal-100 text-teal-700">
+              <Sparkles className="h-4 w-4" />
             </div>
             <div className="min-w-0 flex-1">
               <p className="text-sm font-semibold text-slate-800">Care assistant</p>
-              <p className="text-[11px] text-slate-500">Your plan updates as you answer</p>
+              <p className="text-[11px] text-slate-500">
+                Here to plan your trip · not medical advice
+              </p>
             </div>
             <StageBadge stage={stage} />
-            <button
-              type="button"
-              onClick={closeChat}
-              className="flex shrink-0 items-center gap-0.5 rounded-full px-2 py-1 text-[11px] font-semibold text-slate-500 transition hover:bg-slate-100 hover:text-slate-800"
-            >
-              Hide
-              <ChevronDown className="h-3.5 w-3.5" />
-            </button>
           </header>
 
-          {transcript}
-          {composer}
+          <div className="relative min-h-0 flex-1">
+            <div
+              ref={listRef}
+              onScroll={handleListScroll}
+              className="scrollbar-thin h-full overflow-y-auto overscroll-contain"
+            >
+              <div ref={contentRef} className="space-y-4 px-4 py-4">
+                {loading ? (
+                  <div className="space-y-3">
+                    <Skeleton className="h-16 w-3/4 rounded-2xl" />
+                    <Skeleton className="h-24 w-full rounded-2xl" />
+                  </div>
+                ) : !session ? (
+                  <div className="py-8 text-center">
+                    <p className="text-sm font-medium text-slate-800">
+                      The assistant is unavailable.
+                    </p>
+                    <p className="mt-1 text-sm text-slate-500">
+                      Please call us on {SUPPORT_PHONE} and we'll help you directly.
+                    </p>
+                    <Button className="mt-4" onClick={handleRestart}>
+                      <RefreshCw className="h-4 w-4" />
+                      Try again
+                    </Button>
+                  </div>
+                ) : (
+                  session.messages.map((message) => (
+                    <Turn
+                      key={message.id}
+                      message={message}
+                      busy={busy}
+                      onChoice={(slot, value, label) => {
+                        void run(() => chatApi.choose(session.token, slot, value), label)
+                      }}
+                      onSend={(text) => {
+                        void run(() => chatApi.send(session.token, text), text)
+                      }}
+                    />
+                  ))
+                )}
+
+                {/* Their turn, before the server has one. Same bubble as the
+                    real thing — only dimmed, so the wait reads as "sending"
+                    rather than as a different kind of message. */}
+                {pending !== null && session && (
+                  <div className="flex animate-in justify-end fade-in slide-in-from-bottom-1">
+                    <div className="max-w-[85%] rounded-2xl rounded-br-md bg-brand-600 px-3.5 py-2 text-sm text-white opacity-70 shadow-sm">
+                      {pending}
+                    </div>
+                  </div>
+                )}
+
+                {/* The assistant is composing — shown in the flow so the list
+                    still ends at the bottom while we wait. */}
+                {thinking && session && <TypingBubble />}
+              </div>
+            </div>
+
+            {/* Only while the visitor has scrolled away — otherwise the list
+                follows on its own and a button would be noise. */}
+            {unpinned && session && (
+              <button
+                type="button"
+                onClick={() => scrollToLatest('smooth')}
+                className="absolute bottom-3 left-1/2 flex -translate-x-1/2 items-center gap-1 rounded-full border border-slate-200 bg-white/95 px-3 py-1.5 text-[11px] font-semibold text-slate-600 shadow-md backdrop-blur transition hover:bg-slate-50"
+              >
+                <ChevronDown className="h-3.5 w-3.5" />
+                Latest message
+              </button>
+            )}
+          </div>
+
+          <div className="border-t border-slate-200 p-3">
+            <div className="flex items-center gap-2">
+              <Input
+                ref={inputRef}
+                value={draft}
+                onChange={(event) => setDraft(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' && !event.shiftKey) {
+                    event.preventDefault()
+                    void handleSend()
+                  }
+                }}
+                placeholder={
+                  canType ? 'Type your message…' : 'Your request has been submitted'
+                }
+                disabled={busy || !canType}
+                aria-label="Message"
+              />
+              <Button
+                size="icon"
+                onClick={handleSend}
+                disabled={busy || !canType || !draft.trim()}
+                aria-label="Send"
+              >
+                <Send className="h-4 w-4" />
+              </Button>
+            </div>
+          </div>
+        </div>
+
+        {/* ---- What sits under the conversation ---- */}
+        {submitted?.kind === 'submitted' ? (
+          <div className="mt-3 space-y-3">
+            <SubmittedCard ui={submitted} />
+            <Disclaimer />
+          </div>
+        ) : (
+          !bundle && (
+            <div className="mt-3">
+              <PlanPlaceholder stage={stage} />
+            </div>
+          )
+        )}
+      </main>
+
+      {/*
+        The way back to the plan, pinned so it is reachable from anywhere in the
+        transcript. It carries the total because that is what someone who came
+        back here to ask a question is holding in their head.
+      */}
+      {bundle && !submitted && (
+        <div className="sticky bottom-0 z-20 border-t border-slate-200 bg-white/95 backdrop-blur">
+          <div className="mx-auto w-full max-w-2xl px-4 py-3">
+            <Button size="lg" className="w-full" onClick={showPlan}>
+              Back to your plan · {formatSgd(bundle.totals.totalSgd)}
+              <ArrowRight className="h-4 w-4" />
+            </Button>
+          </div>
         </div>
       )}
     </div>
-  )
-}
-
-/**
- * What this page is, in the only place it belongs: at the top of the
- * conversation, in the same column, scrolling away as the conversation starts.
- *
- * It replaced a full-bleed gradient hero carrying the same three claims at four
- * times the size. The hero was not wrong about the claims — it was wrong about
- * being a separate thing the assistant was placed on.
- */
-const CLAIMS = [
-  'Choose your own hospital',
-  'Every price from the catalogue',
-  'Reviewed by a person',
-]
-
-function Opening() {
-  return (
-    <div className="border-b border-slate-100 pb-5">
-      <h1 className="text-lg font-bold leading-snug tracking-tight text-slate-900">
-        Plan your Batam treatment trip
-      </h1>
-      <p className="mt-1 text-xs leading-relaxed text-slate-500">
-        Tell the care assistant what you need. We build the whole trip from real hospital pricing —
-        treatment, ferries, hotel and transfers — and you choose every part of it.
-      </p>
-
-      <ul className="mt-2.5 flex flex-wrap gap-x-4 gap-y-1 text-[11px] font-medium text-slate-500">
-        {CLAIMS.map((claim) => (
-          <li key={claim} className="flex items-center gap-1">
-            <Check className="h-3 w-3 shrink-0 text-teal-600" />
-            {claim}
-          </li>
-        ))}
-      </ul>
-    </div>
-  )
-}
-
-/**
- * The assistant, once the plan owns the screen.
- *
- * It sits in the step bar at the bottom — the same edge the composer occupied a
- * moment ago — so the thing the visitor talks to has not moved, only shrunk.
- */
-function AssistantButton({ open, onToggle }: { open: boolean; onToggle: () => void }) {
-  return (
-    <Button
-      variant={open ? 'default' : 'outline'}
-      size="icon"
-      onClick={onToggle}
-      aria-expanded={open}
-      aria-label={open ? 'Hide the care assistant' : 'Ask the care assistant'}
-      title={open ? 'Hide the care assistant' : 'Ask the care assistant'}
-    >
-      <Sparkles className="h-4 w-4" />
-    </Button>
   )
 }
 
@@ -759,6 +561,50 @@ function SiteHeader({ onRestart, showRestart }: { onRestart: () => void; showRes
   )
 }
 
+function Hero() {
+  return (
+    <div className="relative overflow-hidden bg-gradient-to-br from-brand-700 via-brand-500 to-teal-500 text-white">
+      {/* Soft radial wash so the flat gradient doesn't read as a colour block. */}
+      <div
+        className="pointer-events-none absolute inset-0 opacity-40"
+        style={{
+          backgroundImage:
+            'radial-gradient(60rem 24rem at 20% -20%, rgba(255,255,255,.35), transparent 60%)',
+        }}
+        aria-hidden
+      />
+
+      {/*
+        Deep bottom padding: the chat card pulls up into this space. Kept
+        deliberately short — the conversation is the point of this page, and
+        every pixel the hero takes is a pixel of it below the fold.
+      */}
+      <div className="relative mx-auto w-full max-w-2xl px-4 pb-24 pt-8 lg:pb-28 lg:pt-10">
+        <h1 className="text-3xl font-bold leading-[1.15] tracking-tight lg:text-4xl">
+          Plan your Batam treatment trip by chat
+        </h1>
+        <p className="mt-3 text-sm leading-relaxed text-white/85">
+          Tell our care assistant what you need. We build the whole plan from real hospital
+          pricing — and you choose every part of it.
+        </p>
+
+        <ul className="mt-5 flex flex-wrap gap-x-5 gap-y-2 text-xs font-medium text-white/90">
+          {[
+            'Choose your own hospital',
+            'Every price from the catalogue',
+            'Reviewed by a person before anything is booked',
+          ].map((claim) => (
+            <li key={claim} className="flex items-center gap-1.5">
+              <Check className="h-3.5 w-3.5 shrink-0 text-white/70" />
+              {claim}
+            </li>
+          ))}
+        </ul>
+      </div>
+    </div>
+  )
+}
+
 function StageBadge({ stage }: { stage: ChatSession['stage'] | undefined }) {
   if (!stage) return null
 
@@ -794,6 +640,60 @@ function Disclaimer() {
         treating hospital and doctor before anything is booked.
       </span>
     </p>
+  )
+}
+
+const HOW_IT_WORKS = [
+  {
+    title: 'Tell us what you need',
+    body: 'A treatment, a rough date, and how many of you are travelling.',
+  },
+  {
+    title: 'Shape your own plan',
+    body: 'Pick the hospital, specialist, ferry, hotel and transfers. Drop anything you don’t want.',
+  },
+  {
+    title: 'A coordinator confirms',
+    body: 'We check availability and final pricing with the hospital, then send your itinerary.',
+  },
+]
+
+function PlanPlaceholder({ stage }: { stage: ChatSession['stage'] | undefined }) {
+  if (stage === 'EMERGENCY') return null
+
+  return (
+    <div className="space-y-3">
+      <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+        <p className="text-sm font-semibold text-slate-800">How this works</p>
+
+        <ol className="mt-3 space-y-3">
+          {HOW_IT_WORKS.map((step, index) => (
+            <li key={step.title} className="flex gap-3">
+              <span
+                className={cn(
+                  'tabular mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[11px] font-bold',
+                  index === 0 ? 'bg-brand-600 text-white' : 'bg-slate-100 text-slate-500',
+                )}
+              >
+                {index + 1}
+              </span>
+              <div className="min-w-0">
+                <p className="text-xs font-semibold text-slate-800">{step.title}</p>
+                <p className="mt-0.5 text-[11px] leading-relaxed text-slate-500">{step.body}</p>
+              </div>
+            </li>
+          ))}
+        </ol>
+      </section>
+
+      <p className="flex items-start gap-2 rounded-xl border border-slate-200 bg-white p-3 text-[11px] leading-relaxed text-slate-500">
+        <ShieldCheck className="mt-px h-3.5 w-3.5 shrink-0 text-teal-600" />
+        <span>
+          Nothing is booked from this chat. Every request is reviewed by a MedBridge coordinator,
+          and a doctor signs off where the procedure needs it.
+        </span>
+      </p>
+    </div>
   )
 }
 

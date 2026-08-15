@@ -113,6 +113,7 @@ export function QuoteBuilder({ detail }: QuoteBuilderProps) {
   const totals = computeTotals(quote)
   const approved = quote.status === 'APPROVED'
   const locked = approved || quote.status === 'REJECTED'
+  const awaitingHospital = detail.status === 'DOCTOR_REVIEW_REQUIRED'
 
   const grouped = CATEGORY_ORDER.map((category) => ({
     category,
@@ -262,6 +263,25 @@ export function QuoteBuilder({ detail }: QuoteBuilderProps) {
               Quote rejected
             </p>
             {quote.notes && <p className="mt-1 text-xs text-rose-700">{quote.notes}</p>}
+          </div>
+        ) : awaitingHospital ? (
+          /*
+             Approving here would 409 — `QuoteController::approve` refuses while
+             the case sits at DOCTOR_REVIEW_REQUIRED. Sign-off is the treating
+             hospital's now, so this says who it is waiting on instead of
+             offering a button that cannot work.
+          */
+          <div className="flex items-start gap-3 rounded-lg border border-orange-200 bg-orange-50 p-4">
+            <Stethoscope className="mt-0.5 h-5 w-5 shrink-0 text-orange-600" />
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-orange-900">
+                Waiting on clinical sign-off from {detail.hospital.name}
+              </p>
+              <p className="text-xs text-orange-700">
+                The treating hospital decides whether the patient is suitable before this quote
+                can be approved. It appears in their partner portal.
+              </p>
+            </div>
           </div>
         ) : (
           <div className="flex flex-col gap-3 rounded-lg border border-amber-200 bg-amber-50 p-4 sm:flex-row sm:items-center">

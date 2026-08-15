@@ -101,10 +101,20 @@ class ReviewGate
             return 'HUMAN_TAKEOVER';
         }
 
-        if (in_array('HIGH_RISK_PROCEDURE', $reasons, true)) {
-            return 'DOCTOR_REVIEW_REQUIRED';
-        }
-
+        /*
+         * There is no separate clinical sign-off state any more.
+         *
+         * HIGH_RISK_PROCEDURE used to route to DOCTOR_REVIEW_REQUIRED, which
+         * blocked approval until a doctor cleared the case in the app. That
+         * models a decision MedBridge does not make: whether a patient is fit
+         * for surgery is settled between the hospital and the patient, off this
+         * system, and encoding it here only produced a state the coordinator
+         * could not clear and the money flow could not leave.
+         *
+         * The flag survives as a REASON — it still marks the case and is still
+         * tunable — but every gated case now lands in the same place: a
+         * coordinator who approves or rejects.
+         */
         return 'HOSPITAL_REVIEW_REQUIRED';
     }
 

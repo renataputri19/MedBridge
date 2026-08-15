@@ -683,10 +683,12 @@ class PatientChatTest extends TestCase
         $this->submitCase('OPH-LSK-01');
         $inquiry = Inquiry::firstOrFail();
 
-        $this->postJson("/api/v1/inquiries/{$inquiry->id}/doctor-review", [
-            'decision' => 'CLEARED',
-            'clinicalNotes' => 'Corneal thickness adequate.',
-        ])->assertOk();
+        // Sign-off is the treating hospital's, addressed by reference — see
+        // PartnerReviewController. Operations has no route to clear a case.
+        $this->postJson(
+            "/api/v1/partners/hospital/{$inquiry->hospital_id}/reviews/{$inquiry->reference}",
+            ['decision' => 'CLEARED', 'clinicalNotes' => 'Corneal thickness adequate.'],
+        )->assertOk();
 
         $inquiry->refresh();
         // Cleared hands it back to operations — it does not approve anything.

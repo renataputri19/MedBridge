@@ -6,10 +6,14 @@ import {
   ArrowLeft,
   CalendarCheck,
   Check,
+  CheckCircle2,
+  ChevronDown,
   Hourglass,
+  Loader2,
   Info,
   Pencil,
   ToggleLeft,
+  Stethoscope,
   ToggleRight,
   Users,
   Wallet,
@@ -19,7 +23,16 @@ import { PageHeader } from '@/components/shared/PageHeader'
 import { KpiCard } from '@/components/dashboard/KpiCard'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
+import { Label } from "@/components/ui/label"
+import { Badge } from "@/components/ui/badge"
+import { Textarea } from "@/components/ui/textarea"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
 import {
@@ -32,6 +45,8 @@ import {
 } from '@/components/ui/table'
 import {
   usePartner,
+  useReviewQueue,
+  useSubmitReview,
   useUpdatePartnerDoctor,
   useUpdatePartnerProcedure,
   useUpdatePartnerRate,
@@ -43,7 +58,10 @@ import type {
   PartnerCatalogue,
   PartnerDoctorRow,
   PartnerProcedureRow,
+  PartnerReviewRow,
   PartnerType,
+  ReviewReason,
+  DoctorReviewDecision,
   UUID,
 } from '@/types'
 
@@ -229,6 +247,9 @@ export default function PartnerPortal({ type }: { type: PartnerType }) {
         </CardContent>
       </Card>
 
+      {/* ---- Cases waiting on my clinical judgement ------------------------ */}
+      {type === 'hospital' && <ClinicalSignOff hospitalId={portal.id} />}
+
       {/* ---- My rates, which I maintain ----------------------------------- */}
       {type === 'hospital' ? (
         <>
@@ -252,6 +273,236 @@ export default function PartnerPortal({ type }: { type: PartnerType }) {
         </CardContent>
       </Card>
     </div>
+  )
+}
+
+/* -------------------------------------------------------------------------- */
+/* Clinical sign-off                                                           */
+/* -------------------------------------------------------------------------- */
+
+const REASON_COPY: Record<ReviewReason, string> = {
+  LOW_CONFIDENCE: 'The request was not understood confidently.',
+  UNKNOWN_PROCEDURE: 'The request did not match a listed procedure.',
+  EMERGENCY_LANGUAGE: 'The patient used emergency or acute-symptom language.',
+  HIGH_RISK_PROCEDURE: 'This procedure always requires clinical sign-off.',
+  PRICE_OUT_OF_BAND: 'The quoted price fell outside the expected band.',
+}
+
+const DECISIONS: { value: DoctorReviewDecision; label: string; hint: string }[] = [
+  {
+    value: 'CLEARED',
+    label: 'Suitable for treatment',
+    hint: 'Hands the case back to a MedBridge coordinator to finalise the quote.',
+  },
+  {
+    value: 'NEEDS_CONSULT',
+    label: 'Needs a consult first',
+    hint: 'Keeps the case with you. Nothing is quoted until you decide.',
+  },
+  {
+    value: 'DECLINED',
+    label: 'Not suitable',
+    hint: 'The case is escalated to a MedBridge coordinator to speak to the patient.',
+  },
+]
+
+/**
+ * Cases this facility must decide on before MedBridge can quote them.
+ *
+ * This is the half of the human-in-the-loop chain that belongs to the hospital.
+ * It moved here from the operations portal, where it was both misplaced and
+ * unscoped — MedBridge does not employ the surgeon, and judging whether a
+ * patient is suitable for a procedure is the treating facility's call.
+ *
+ * Clearing a case releases nothing on its own: it hands the case back to a
+ * coordinator, who still has to approve the quote before any patient sees a
+ * link. That sentence is on screen, because a button that reads like final
+ * approval will be pressed like one.
+ */
+function ClinicalSignOff({ hospitalId }: { hospitalId: UUID }) {
+  const { data: queue, isLoading } = useReviewQueue(hospitalId)
+  const [openRef, setOpenRef] = useState<string | null>(null)
+
+  const pending = queue?.pending ?? []
+
+  return (
+    <Card>
+      <CardHeader className="border-b border-slate-100">
+        <CardTitle className="flex items-center gap-2">
+          <Stethoscope className="h-4 w-4 text-slate-400" />
+          Waiting for your clinical sign-off
+          {pending.length > 0 && (
+            <span className="tabular rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700">
+              {pending.length}
+            </span>
+          )}
+        </CardTitle>
+        <p className="text-sm text-slate-500">
+          Patients who chose you and cannot be quoted until a clinician here decides they are
+          suitable. Your decision does not send anything to the patient — a MedBridge coordinator
+          approves the quote afterwards.
+        </p>
+      </CardHeader>
+
+      <CardContent className="pt-5">
+        {isLoading ? (
+          <Skeleton className="h-24 w-full rounded-lg" />
+        ) : pending.length === 0 ? (
+          <p className="rounded-lg border border-dashed border-slate-200 px-4 py-8 text-center text-sm text-slate-500">
+            Nothing is waiting on you.
+          </p>
+        ) : (
+          <ul className="space-y-3">
+            {pending.map((row) => (
+              <ReviewRow
+                key={row.reference}
+                hospitalId={hospitalId}
+                row={row}
+                open={openRef === row.reference}
+                onToggle={() => setOpenRef(openRef === row.reference ? null : row.reference)}
+              />
+            ))}
+          </ul>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
+function ReviewRow({
+  hospitalId,
+  row,
+  open,
+  onToggle,
+}: {
+  hospitalId: UUID
+  row: PartnerReviewRow
+  open: boolean
+  onToggle: () => void
+}) {
+  const [decision, setDecision] = useState<DoctorReviewDecision>('CLEARED')
+  const [notes, setNotes] = useState('')
+
+  const submit = useSubmitReview(hospitalId)
+
+  const send = () => {
+    submit.mutate(
+      {
+        reference: row.reference,
+        decision,
+        clinicalNotes: notes.trim(),
+        doctorId: row.doctorId,
+      },
+      {
+        onSuccess: () => {
+          toast.success('Clinical decision recorded', {
+            description:
+              decision === 'CLEARED'
+                ? 'Sent back to a MedBridge coordinator to finalise the quote.'
+                : decision === 'DECLINED'
+                  ? 'A coordinator will contact the patient.'
+                  : 'The case stays with you until the consult is done.',
+          })
+        },
+        onError: () => toast.error('Could not record the decision. Please retry.'),
+      },
+    )
+  }
+
+  return (
+    <li className="rounded-lg border border-slate-200">
+      <button
+        type="button"
+        onClick={onToggle}
+        className="flex w-full items-center gap-3 px-3 py-2.5 text-left"
+      >
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-sm font-medium text-slate-900">
+            {row.patientFirstName} · {row.procedureName}
+          </p>
+          <p className="font-mono text-[11px] text-slate-400">
+            {row.reference}
+            {row.doctorName && ` · ${row.doctorName}`}
+          </p>
+        </div>
+        <ChevronDown
+          className={cn('h-4 w-4 shrink-0 text-slate-400 transition', open && 'rotate-180')}
+        />
+      </button>
+
+      {open && (
+        <div className="space-y-4 border-t border-slate-100 p-3">
+          {row.reviewReasons.length > 0 && (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+              <p className="font-semibold">Why this needs you</p>
+              <ul className="mt-1 space-y-0.5">
+                {row.reviewReasons.map((reason) => (
+                  <li key={reason}>• {REASON_COPY[reason]}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {row.symptomKeywords.length > 0 && (
+            <div>
+              <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                Symptoms the patient described
+              </p>
+              <div className="flex flex-wrap gap-1.5">
+                {row.symptomKeywords.map((symptom) => (
+                  <Badge key={symptom} variant="neutral" size="sm">
+                    {symptom}
+                  </Badge>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div className="space-y-2">
+            <Label htmlFor={`decision-${row.reference}`}>Clinical decision</Label>
+            <Select
+              value={decision}
+              onValueChange={(value) => setDecision(value as DoctorReviewDecision)}
+            >
+              <SelectTrigger id={`decision-${row.reference}`}>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {DECISIONS.map((option) => (
+                  <SelectItem key={option.value} value={option.value}>
+                    {option.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-slate-400">
+              {DECISIONS.find((d) => d.value === decision)?.hint}
+            </p>
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor={`notes-${row.reference}`}>Clinical notes</Label>
+            <Textarea
+              id={`notes-${row.reference}`}
+              value={notes}
+              onChange={(event) => setNotes(event.target.value)}
+              rows={3}
+              placeholder="Records reviewed, contraindications considered, pathway suitability…"
+            />
+          </div>
+
+          <Button
+            onClick={send}
+            disabled={submit.isPending || !notes.trim()}
+            size="sm"
+            className="w-full"
+          >
+            {submit.isPending ? <Loader2 className="animate-spin" /> : <CheckCircle2 />}
+            Record decision
+          </Button>
+        </div>
+      )}
+    </li>
   )
 }
 

@@ -120,58 +120,6 @@ class InquiryController extends Controller
         return response()->json($inquiry->fresh()->toApiDetail());
     }
 
-    /**
-     * POST /inquiries/{id}/doctor-review
-     *
-     * CLEARED hands the case back to operations; it does not approve anything.
-     * A cleared case still needs the operations approval that mints the token.
-     */
-    public function doctorReview(Request $request, string $id): JsonResponse
-    {
-        $inquiry = $this->find($id);
-
-        $data = $request->validate([
-            'decision' => ['required', Rule::in(['PENDING', 'CLEARED', 'NEEDS_CONSULT', 'DECLINED'])],
-            'clinicalNotes' => ['nullable', 'string', 'max:4000'],
-            'doctorId' => ['nullable', 'uuid', Rule::exists('doctors', 'id')],
-            'requiredPreOpTests' => ['nullable', 'array'],
-            'requiredPreOpTests.*' => ['string', 'max:120'],
-        ]);
-
-        DoctorReview::updateOrCreate(
-            ['inquiry_id' => $inquiry->id],
-            [
-                'doctor_id' => $data['doctorId'] ?? $inquiry->doctor_id,
-                'decision' => $data['decision'],
-                'clinical_notes' => $data['clinicalNotes'] ?? '',
-                'required_pre_op_tests' => $data['requiredPreOpTests'] ?? [],
-                'reviewed_at' => $data['decision'] === 'PENDING' ? null : now(),
-            ]
-        );
-
-        $status = match ($data['decision']) {
-            'CLEARED' => 'HOSPITAL_REVIEW_REQUIRED',
-            'DECLINED' => 'HUMAN_TAKEOVER',
-            default => $inquiry->status,   // NEEDS_CONSULT holds where it is
-        };
-
-        $inquiry->update([
-            'status' => $status,
-            'doctor_id' => $data['doctorId'] ?? $inquiry->doctor_id,
-        ]);
-
-        ActivityEvent::record(
-            'DOCTOR_REVIEW_SUBMITTED', 'DOCTOR',
-            'Doctor review — '.$data['decision'],
-            $data['clinicalNotes'] ?: 'Clinical decision recorded.',
-            ['decision' => $data['decision'], 'resulting_status' => $status],
-            $inquiry,
-            $data['decision'] === 'DECLINED' ? 'warning' : 'success',
-        );
-
-        return response()->json($inquiry->fresh()->toApiDetail());
-    }
-
     private function find(string $id): Inquiry
     {
         return Inquiry::whereKey($id)->firstOr(fn () => abort(404, 'Inquiry not found.'));

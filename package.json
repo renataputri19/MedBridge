@@ -2,8 +2,8 @@
     "private": true,
     "type": "module",
     "scripts": {
-        "dev": "vite",
-        "build": "vite build"
+        "dev": "npm --prefix web run dev",
+        "build": "npm --prefix web run build"
     },
     "devDependencies": {
         "axios": "^1.6.4",

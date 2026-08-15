@@ -33,17 +33,19 @@ import type {
 } from '@/types'
 
 /**
- * The plan — the second half of one page, not a page of its own.
+ * The plan — the right-hand column, beside the conversation that built it.
  *
- * Two earlier shapes were both wrong, in opposite directions. Side by side, the
- * patient read a conversation and evaluated two dozen priced choices at once.
- * Split into two views, the swap read as landing on a different website, and
- * every question meant leaving the plan to go and ask it.
+ * Two things were true at once and it took three tries to hold both. The plan
+ * belongs *next to* the chat, because a patient who asks a question should not
+ * lose the thing they are asking about, and a page swap made every question
+ * cost them the plan. But a plan laid out in full, beside a conversation, asks
+ * someone to read a discussion and evaluate two dozen priced choices at the
+ * same time.
  *
- * So there is one column that grows: the conversation collects, and the plan
- * appears underneath it while the conversation folds up into a strip at the top.
- * Nothing is replaced, so nothing has to be found again — and the three steps
- * still keep only the choices belonging to one job on screen at a time.
+ * So: one column, and inside it three steps. The column is what keeps this from
+ * being a second page. The steps are what keep it from being a wall — only the
+ * choices belonging to the current job are on screen, and each of those is one
+ * collapsed row until the patient opens it.
  *
  * What has NOT changed is who chooses. Every category still lists its real
  * alternatives — hospital, specialist, both ferry legs, hotel, transfer — and
@@ -128,18 +130,6 @@ const TRIP_CATEGORIES: QuoteCategory[] = ['FERRY', 'HOTEL', 'TRANSPORT']
 interface PlanFlowProps {
   bundle: ChatBundle
   disabled?: boolean
-  /**
-   * The assistant control, at the head of the step bar. Owned by the page
-   * because the conversation is: this reserves it a permanent place at the
-   * bottom edge, which is where the composer was a moment ago.
-   */
-  leading?: React.ReactNode
-  /**
-   * False while the conversation is raised over the plan, which occupies the
-   * bottom of the screen itself. Two things pinned to the same edge is one of
-   * them covering the other.
-   */
-  pinnedFooter?: boolean
   onToggle: (key: string, included: boolean) => void
   onSwap: (key: string, refId: string) => void
   onChooseHospital: (refId: string) => void
@@ -152,8 +142,6 @@ interface PlanFlowProps {
 export function PlanFlow({
   bundle,
   disabled,
-  leading,
-  pinnedFooter = true,
   onToggle,
   onSwap,
   onChooseHospital,
@@ -169,8 +157,8 @@ export function PlanFlow({
 
   const go = (next: PlanStep) => {
     setStep(next)
-    // A step is a new page as far as the reader is concerned, so it starts at
-    // the top rather than halfway down wherever the last one was scrolled to.
+    // A step's rows swap out under the reader, so it starts at the top of the
+    // column rather than halfway down wherever the last one was scrolled to.
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
@@ -179,11 +167,11 @@ export function PlanFlow({
   return (
     <>
       {/*
-        No "back to chat" link: there is nothing to go back to. The conversation
-        is directly above this heading, folded up, and unfolds where it stands.
+        No "back to chat". The chat is not behind this, it is beside it — and on
+        a phone it is the card directly above.
       */}
-      <div className="mx-auto w-full max-w-2xl px-4 pt-4">
-        <h1 className="text-xl font-bold leading-tight tracking-tight text-slate-900">
+      <div className="px-1">
+        <h1 className="text-lg font-bold leading-tight tracking-tight text-slate-900">
           {bundle.procedure?.name ?? 'Your plan'}
         </h1>
 
@@ -212,21 +200,18 @@ export function PlanFlow({
       </div>
 
       {/*
-        Steps and the running total, pinned under the site header. Full bleed
-        rather than the width of the column — a bar that stops where the cards
-        stop reads as a floating slab instead of page chrome. The title above is
-        allowed to scroll away; the number being decided against is not.
+        Steps and the running total, pinned under the site header for as long as
+        the column is on screen. The title above is allowed to scroll away; the
+        number being decided against is not.
       */}
-      <div className="sticky top-[3.75rem] z-30 mt-3 border-y border-slate-200 bg-white/95 backdrop-blur">
-        <div className="mx-auto flex w-full max-w-2xl items-center gap-3 px-4 py-2">
-          <Stepper step={step} onStepChange={go} />
-          <p className="ml-auto shrink-0 text-lg font-bold leading-none text-slate-900">
-            {formatSgd(bundle.totals.totalSgd)}
-          </p>
-        </div>
+      <div className="sticky top-[3.75rem] z-30 mt-2.5 flex items-center gap-3 rounded-xl border border-slate-200 bg-white/95 px-2.5 py-2 shadow-sm backdrop-blur">
+        <Stepper step={step} onStepChange={go} />
+        <p className="ml-auto shrink-0 text-lg font-bold leading-none text-slate-900">
+          {formatSgd(bundle.totals.totalSgd)}
+        </p>
       </div>
 
-      <div className="mx-auto w-full max-w-2xl space-y-3 px-4 py-4">
+      <div className="space-y-3 py-3">
         <div className="px-1">
           <h2 className="text-sm font-bold text-slate-900">{current.title}</h2>
           <p className="mt-0.5 text-xs leading-relaxed text-slate-500">{current.body}</p>
@@ -245,45 +230,40 @@ export function PlanFlow({
         {step === 'review' && (
           <ReviewStep bundle={bundle} contactForm={contactForm} disclaimer={disclaimer} />
         )}
-
       </div>
 
       {/*
-        One bar on every step, including the last. The assistant is the first
-        thing in it and never moves, so the visitor always knows where the
-        conversation went — the review step used to drop the whole bar, which
-        took the way back to it with them.
+        Pinned to the bottom of the phone, where a thumb is; a plain bar at the
+        end of the column on a desktop, where the whole step is already in view
+        and a floating slab over the conversation beside it would be noise.
       */}
-      <div
-        className={cn(
-          'z-20 border-t border-slate-200 bg-white/95 backdrop-blur',
-          pinnedFooter && 'sticky bottom-0',
-        )}
-      >
-        <div className="mx-auto flex w-full max-w-2xl items-center gap-2 px-4 py-3">
-          {leading}
-
+      {current.next ? (
+        <div className="sticky bottom-0 z-20 -mx-4 flex items-center gap-2 border-t border-slate-200 bg-white/95 px-4 py-3 backdrop-blur lg:static lg:mx-0 lg:rounded-xl lg:border lg:shadow-sm">
           {previous && (
             <Button variant="outline" onClick={() => go(previous.id)}>
               <ArrowLeft className="h-4 w-4" />
               <span className="hidden sm:inline">{previous.label}</span>
             </Button>
           )}
-
-          {current.next ? (
-            <Button size="lg" className="flex-1" onClick={() => go(STEPS[index + 1].id)}>
-              {current.next}
-              <ArrowRight className="h-4 w-4" />
-            </Button>
-          ) : (
-            /* Nothing to advance to: the only action left is the one inside the
-               form above, and duplicating it here would be a second send. */
-            <p className="flex-1 text-center text-[11px] leading-snug text-slate-500">
-              Fill in your details above to send this plan for review.
-            </p>
-          )}
+          <Button size="lg" className="flex-1" onClick={() => go(STEPS[index + 1].id)}>
+            {current.next}
+            <ArrowRight className="h-4 w-4" />
+          </Button>
         </div>
-      </div>
+      ) : (
+        previous && (
+          <div className="flex justify-center pb-6">
+            <button
+              type="button"
+              onClick={() => go(previous.id)}
+              className="flex items-center gap-1.5 py-2 text-xs font-medium text-slate-500 transition hover:text-brand-700"
+            >
+              <ArrowLeft className="h-3.5 w-3.5" />
+              Back to your {previous.label.toLowerCase()}
+            </button>
+          </div>
+        )
+      )}
     </>
   )
 }

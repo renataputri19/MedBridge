@@ -1,7 +1,6 @@
 import { Link, useParams } from 'react-router-dom'
 import { ArrowLeft, Clock, ExternalLink, FileWarning, Hospital, MapPin } from 'lucide-react'
 import { PatientPanel } from '@/components/inquiries/PatientPanel'
-import { DoctorReviewPanel } from '@/components/inquiries/DoctorReviewPanel'
 import { QuoteBuilder } from '@/components/inquiries/QuoteBuilder'
 import { StatusBadge } from '@/components/shared/StatusBadge'
 import { ChannelBadge } from '@/components/shared/ChannelBadge'
@@ -180,7 +179,6 @@ export default function InquiryDetail() {
         {/* Right column */}
         <div className="space-y-6 lg:col-span-2">
           <QuoteBuilder detail={detail} />
-          <DoctorReviewPanel detail={detail} />
         </div>
       </div>
     </div>

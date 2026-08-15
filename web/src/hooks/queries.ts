@@ -15,7 +15,6 @@ import {
 import {
   activityApi,
   catalogueApi,
-  doctorReviewApi,
   inquiriesApi,
   itineraryApi,
   partnersApi,
@@ -47,6 +46,7 @@ export const queryKeys = {
   quotes: ['quotes'] as const,
   partners: (type: string) => ['partners', type] as const,
   partner: (type: string, id: UUID) => ['partners', type, id] as const,
+  reviewQueue: (hospitalId: UUID) => ['partners', 'hospital', hospitalId, 'reviews'] as const,
   saas: ['saas', 'summary'] as const,
 }
 
@@ -363,18 +363,38 @@ export function useRejectQuote(inquiryId: UUID) {
   })
 }
 
-export function useSubmitDoctorReview(inquiryId: UUID) {
-  const invalidate = useInquiryInvalidator()
+/* -------------------------------------------------------------------------- */
+/* Clinical sign-off — the hospital's, not operations'                         */
+/* -------------------------------------------------------------------------- */
+
+export function useReviewQueue(hospitalId: UUID | undefined) {
+  return useQuery({
+    queryKey: queryKeys.reviewQueue(hospitalId ?? ''),
+    queryFn: () => partnersApi.reviewQueue(hospitalId!),
+    enabled: Boolean(hospitalId),
+    retry: false,
+  })
+}
+
+export function useSubmitReview(hospitalId: UUID) {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (input: {
+    mutationFn: ({
+      reference,
+      ...body
+    }: {
+      reference: string
       decision: DoctorReviewDecision
       clinicalNotes: string
-      doctorId: UUID | null
-    }) => doctorReviewApi.submit(inquiryId, input),
-    onSuccess: (detail) => {
-      queryClient.setQueryData(queryKeys.inquiry(inquiryId), detail)
-      invalidate(inquiryId)
+      doctorId?: UUID | null
+      requiredPreOpTests?: string[]
+    }) => partnersApi.submitReview(hospitalId, reference, body),
+    onSuccess: () => {
+      // The queue shrinks, and the case moves on — so the pipeline and the
+      // portal's own counts both go stale.
+      void queryClient.invalidateQueries({ queryKey: queryKeys.reviewQueue(hospitalId) })
+      void queryClient.invalidateQueries({ queryKey: ['partner'] })
+      void queryClient.invalidateQueries({ queryKey: ['inquiries'] })
     },
   })
 }
